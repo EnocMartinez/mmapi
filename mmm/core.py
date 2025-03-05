@@ -388,7 +388,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                     exit(-1)
 
 
-def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, data_type, foi_id: int = 0, average="",
+def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, data_type, foi_name: str, average="",
                    usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data") -> bool:
     """
     This function performs a bulk load of the data contained in the input file
@@ -401,6 +401,9 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
     rich.print(f"    dataType={data_type}")
     rich.print(f"    average={average}")
     assert data_type in mmapi_data_types, f"data_type={data_type} not valid!"
+
+
+
 
     if filename.endswith(".csv"):
         opened = False
@@ -462,6 +465,10 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
 
     db = SensorThingsApiDB(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger(), timescaledb=True)
+
+
+    foi_id = db.value_from_query(f'select "ID" from "FEATURES" where "NAME" = \'{foi_name}\';')
+
 
     if data_type == "timeseries":
         if not average:  # timeseries with full data

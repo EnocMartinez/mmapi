@@ -29,7 +29,7 @@ if __name__ == "__main__":
     argparser.add_argument("-j", "--json", help="JSON-like data, such as AI-inference data", action="store_true")
     argparser.add_argument("-f", "--files", help="Files data (register the paths)", action="store_true")
     argparser.add_argument("--usecs", help="use microsecond precision", action="store_true")
-    argparser.add_argument("-F", "--foi", help="FeatureOfInterest ID to assign to the Observations", type=int, required=True)
+    argparser.add_argument("-F", "--foi", help="FeatureOfInterest ID to assign to the Observations", type=str, required=True)
     args = argparser.parse_args()
     
     with open(args.secrets) as f:
@@ -57,6 +57,8 @@ if __name__ == "__main__":
         raise ValueError(f"Unimplemented type!")
 
     rich.print(f"[cyan]Bulk load data from sensor {args.sensor_id} file {args.file}")
+
+
     bulk_load_data(args.file, psql_conf, url, args.sensor_id, data_type, args.foi, average=args.average, no_qc=args.no_qc,
                    usecs=args.usecs)
 
