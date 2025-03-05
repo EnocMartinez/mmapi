@@ -402,65 +402,100 @@ class DataCollector(LoggerSuperclass):
         sensor_name = sensor["#id"]
         station_name = station["#id"]
 
-        model_name = ""
-        self.info(f"Getting detections with sensor={sensor_name} thing={station_name} from {time_start} to {time_end}")
-        try:
-            model_name = conf["constraints"]["@processes"]
-            self.info(f"Using data from AI process {model_name}")
-        except KeyError:
-           self.error("AI process not defined in 'detections' dataset!", exception=True)
 
+        time_periods = []
 
-        variables = []  # by default all variables will be used
-        if "@variables" in conf.keys():
-            variables = conf["@variables"]
+        if "fieldOfView" in conf["constraints"]:
+            # Process fieldOfView constraint
+            deployments = self.mc.get_sensor_deployments(sensor)
+            # Keep only periods where the camera was looking to the chosen fieldOfView
+            for deployment in deployments:
+                if "fieldOfView" not in deployment.keys():
+                    self.error(f"Deployment has no fieldOfView! sensor={sensor_name} activity_id={deployment['id']}",
+                               exception=ValueError)
+                rich.print(deployment)
+                if conf["constraints"]["fieldOfView"]["@programmes"] == deployment["fieldOfView"]["@programmes"]:
+                    if deployment["end"]:
+                        end = deployment["end"]
+                    else:
+                        end = time_end
+                    time_periods.append((deployment["start"], end))
+                else:
+                    # No deployment with the fieldOfView of interest!
+                    pass
 
-        self.debug(f"getting datastream_id where dataType=json and sensor={sensor_name} and station={station_name}")
-        # First get all the times where we have inferences. Let's assume that we only have one datastream that
-        # matches data_type=json and model_name=<AI model>
-        q = f""" select \"ID\" from \"DATASTREAMS\" 
-            where 
-                \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
-                and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
-                and \"PROPERTIES\"->>'dataType' = 'json'
-            	and \"PROPERTIES\"->>'modelName' = '{model_name}'
-            ;"""
-        inference_datastream = self.sta.value_from_query(q)
-        self.debug(f"Pictures datastream_id = {inference_datastream}")
-        df_inf = self.sta.dataframe_from_query(f'''
-            select
-                "PHENOMENON_TIME_START" as timestamp,
-                "PARAMETERS"->>'processedImage' as picture
-            from "OBSERVATIONS"
-            where 
-                "DATASTREAM_ID" = {inference_datastream} and
-                "PHENOMENON_TIME_START" between '{time_start}' and '{time_end}'
-            ;
-            ''')
-        df_inf = df_inf.set_index("timestamp")
-        taxa_dict = self.sta.dict_from_query(
-            f"""
-            select \"PROPERTIES\"->>'standardName' as taxa, \"ID\"  from \"DATASTREAMS\"
-                where	
-                \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
-                and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
-                and \"PROPERTIES\"->>'dataType' = 'detections'
-                and \"PROPERTIES\"->>'modelName' = '{model_name}'
-         """)
+        else:
+            time_periods = [(time_start, time_end)]
+        rich.print(f"Sensor {sensor_name} time periods {time_periods}")
+        dataframes = []
 
-        for taxa, datastream_id in taxa_dict.items():
-            self.debug(f"Getting taxa='{taxa}' with ID={datastream_id}")
-            df = self.sta.dataframe_from_query(f'''
-                select timestamp, value as "{taxa}" from detections
-                where datastream_id = {datastream_id} and timestamp between '{time_start}' and '{time_end}';
-            ''').set_index("timestamp")
-            if df.empty:
-                df_inf[taxa] = 0
-            else:
-                df_inf = df_inf.join(df, "timestamp", "left")
+        for time_start, time_end in time_periods:
+            model_name = ""
+            self.info(f"Getting detections with sensor={sensor_name} thing={station_name} from {time_start} to {time_end}")
+            try:
+                model_name = conf["constraints"]["@processes"]
+                self.info(f"Using data from AI process {model_name}")
+            except KeyError:
+               self.error("AI process not defined in 'detections' dataset!", exception=True)
 
-            df_inf[taxa] = df_inf[taxa].replace(np.nan, 0).astype(int)
-        return df_inf
+            self.debug(f"getting datastream_id where dataType=json and sensor={sensor_name} and station={station_name}")
+            # First get all the times where we have inferences. Let's assume that we only have one datastream that
+            # matches data_type=json and model_name=<AI model>
+            q = f""" select \"ID\" from \"DATASTREAMS\" 
+                where 
+                    \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
+                    and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
+                    and \"PROPERTIES\"->>'dataType' = 'json'
+                    and \"PROPERTIES\"->>'modelName' = '{model_name}'
+                ;"""
+            try:
+                inference_datastream = self.sta.value_from_query(q)
+            except LookupError:
+                return pd.DataFrame()  # return empty dataframe
+
+            self.debug(f"Pictures datastream_id = {inference_datastream}")
+            df_inf = self.sta.dataframe_from_query(f'''
+                select
+                    "PHENOMENON_TIME_START" as timestamp,
+                    "PARAMETERS"->>'sourceImage' as "SourceImage",
+                    "PARAMETERS"->>'processedImage' as "ProcessedImage"                    
+                from "OBSERVATIONS"
+                where 
+                    "DATASTREAM_ID" = {inference_datastream} and
+                    "PHENOMENON_TIME_START" between '{time_start}' and '{time_end}'
+                ;
+                ''')
+            # Adding SENSOR_ID
+            df_inf["SENSOR_ID"] = sensor_name
+            df_inf = df_inf.set_index("timestamp")
+
+            taxa_dict = self.sta.dict_from_query(
+                f"""
+                select \"PROPERTIES\"->>'standardName' as taxa, \"ID\"  from \"DATASTREAMS\"
+                    where	
+                    \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
+                    and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
+                    and \"PROPERTIES\"->>'dataType' = 'detections'
+                    and \"PROPERTIES\"->>'modelName' = '{model_name}'
+             """)
+
+            for taxa, datastream_id in taxa_dict.items():
+                self.debug(f"Getting taxa='{taxa}' with ID={datastream_id}")
+                df = self.sta.dataframe_from_query(f'''
+                    select timestamp, value as "{taxa}" from detections
+                    where datastream_id = {datastream_id} and timestamp between '{time_start}' and '{time_end}';
+                ''').set_index("timestamp")
+                if df.empty:
+                    df_inf[taxa] = 0
+                else:
+                    df_inf = df_inf.join(df, "timestamp", "left")
+
+                df_inf[taxa] = df_inf[taxa].replace(np.nan, 0).astype(int)
+            dataframes.append(df_inf)
+        if not dataframes:
+            return pd.DataFrame()
+        df = pd.concat(dataframes).sort_index()
+        return df
 
     def dataframe_from_sta_timeseries(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
                                       time_end: pd.Timestamp = None):
@@ -784,6 +819,9 @@ class DataCollector(LoggerSuperclass):
         for sensor_name in conf["@sensors"]:
             sensor = self.mc.get_document("sensors", sensor_name)
             df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
+            if df.empty:
+                self.warning(f"No data for sensor={sensor_name}  between {time_start} and {time_end}")
+                continue
             if len(conf["@sensors"]) > 1:
                 df["SENSOR_ID"] = sensor_name
             dataframes.append(df)
@@ -802,6 +840,7 @@ class DataCollector(LoggerSuperclass):
         else:
             df = merge_dataframes(dataframes)
 
+        df = df.sort_index()
         df.to_csv(filename)
         return filename
 

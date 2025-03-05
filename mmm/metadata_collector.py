@@ -909,7 +909,6 @@ class MetadataCollector(LoggerSuperclass):
 
 
     def __get_deployments(self, element_type, identifier) -> []:
-
         # Get all activities and involving this station
         sql_filter = f"where doc->'appliedTo'->>'@{element_type}' = '{identifier}'"
         hist = self.get_documents("activities", filter=sql_filter)
@@ -925,6 +924,7 @@ class MetadataCollector(LoggerSuperclass):
         deployments = []
         for d in act_deployments:
             deployment = {
+                "id": d["#id"],
                 "start": pd.to_datetime(d["time"]),
                 "end": None,
             }
@@ -933,12 +933,18 @@ class MetadataCollector(LoggerSuperclass):
             if "@stations" in d["where"].keys():
                 deployment["station"] = d["where"]["@stations"]
 
+            if "fieldOfView" in d.keys():
+                deployment["fieldOfView"] = d["fieldOfView"]
+
             deployments.append(deployment)
+
 
         deployments = sorted(deployments, key=lambda x: x["start"])
 
         for i in range(len(deployments)):
             deployment = deployments[i]
+            deployment_end_candidates = []
+
             # recovery upper limit
             upper_limit = pd.to_datetime("2100-01-01", utc=True)
             if i == len(deployments) - 1:
@@ -946,17 +952,15 @@ class MetadataCollector(LoggerSuperclass):
                 pass
             else:
                 upper_limit = pd.to_datetime(deployments[i + 1]["start"])
+                deployment_end_candidates.append(upper_limit)
 
-            candidates = []
             for timestamp in recover_dates:
-
                 # Get the timestamp
                 if deployment["start"] < timestamp <= upper_limit:
-                    candidates.append(timestamp)
+                    deployment_end_candidates.append(timestamp)
 
-            if len(candidates) > 0:
-                deployment["end"] = min(candidates)  # The first candidate is the valid recovery time
-
+            if len(deployment_end_candidates) > 0:
+                deployment["end"] = min(deployment_end_candidates)  # The first candidate is the valid recovery time
         return deployments
 
 
