@@ -361,8 +361,9 @@ __datasets = {
                 "fieldOfView": {  # Inteded to select cameras with specific resource withine their field of view
                     "type": "object",
                     "properties": {
-                        "@resources": {"type":  "string"}
-                    }
+                        "@programmes": {"type":  "string"}
+                    },
+                    "required": ["@programmes"]
                 }
             }
         },
@@ -413,18 +414,25 @@ __activities = {
             }
         },
         "fieldOfView": {
+            "type": "object",
             # This is used to record a camera looking at a particular position
             "properties": {
-                "@resources": {"type": "string"},
+                "@programmes": {"type": "string"},
             },
-            "required": ["@resources"]
+            "required": ["@programmes"]
         },
         "where": {
             "type": "object",
             "properties": {
                 "@stations": {"type": "string",  "minLength": 2},
                 "position": __coordinates__
+                #"station": {"type": "string"},
+                #"position": {"type": "string"}
             },
+            "oneOf" : [
+                {"required": ["@stations"]},
+                {"required": ["position"]}
+            ],
             "required": []
         },
     },
@@ -501,7 +509,7 @@ __units = {
     "$id": "mmm:units",
     "type": "object",
     "properties": {
-        "name": {"type": "string"},
+        "name": {"type": "string", "definition": "units name", "$comment": "VOCAB:P06:prefLabel"},
         "symbol": {"type": "string"},
         "definition": {"type": "string"},
         "type": {"type": "string", "enum": __unit_type}
