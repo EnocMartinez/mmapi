@@ -16,7 +16,7 @@ from flask import Flask, request, Response
 from flask_cors import CORS
 from mmm import MetadataCollector, init_metadata_collector_env, init_metadata_collector
 from mmm.common import setup_log
-from mmm.schemas import mmm_schemas
+from mmm.schemas import mmm_schemas, mmm_metadata
 import json
 import os
 
@@ -39,7 +39,10 @@ def run_metadata_api(secrets: str|dict,  log, mc):
     # embed MetadataCollector to app
     app.mc = mc
     app.mmapi_url = secrets["mmapi"]["root_url"]
-    port = secrets["mmapi"]["port"]
+    if "port" not in secrets["mmapi"].keys():
+        port = 8080
+    else:
+        port = secrets["mmapi"]["port"]
     app.run(host="0.0.0.0", port=port, debug=False)
     return app
 
@@ -136,6 +139,20 @@ def get_by_id(collection: str, identifier: str):
         return Response(json.dumps(json_error), status=404, mimetype="application/json")
 
     return Response(json.dumps(document), status=200, mimetype="application/json")
+
+
+@app.route('/mmapi/v1.0/schemas', methods=['GET'])
+def get_all_schemas():
+    all_schemas = {}
+    for key, schema in mmm_schemas.items():
+        all_schemas[key] = schema
+    return Response(json.dumps(all_schemas), status=200, mimetype="application/json")
+
+
+@app.route('/mmapi/v1.0/metadata_schema', methods=['GET'])
+def get_meta_schema():
+    return Response(json.dumps(mmm_metadata), status=200, mimetype="application/json")
+
 
 
 @app.route('/mmapi/v1.0/schemas/<path:collection>', methods=['GET'])
@@ -241,10 +258,8 @@ if __name__ == "__main__":
 
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
-        root_url = secrets["mmapi"]["root_url"]
-        port = secrets["mmapi"]["port"]
 
-    mc = init_metadata_collector(secrets)
+
     log = setup_log("Metadata API")
-
+    mc = init_metadata_collector(secrets, log=log)
     run_metadata_api(secrets,  log, mc)
