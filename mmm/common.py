@@ -159,19 +159,19 @@ class LoggerSuperclass:
         """
         SuperClass that defines logging as class methods adding a heading name
         """
-        self.__logger_name = name
-        self.__logger = logger
+        self.logger_name = name
+        self.logger = logger
         if not logger:
-            self.__logger = logging  # if not assign the generic module
+            self.logger = logging  # if not assign the generic module
         self.__log_colour = colour
 
     def warning(self, *args):
-        mystr = YEL + "[%s] " % self.__logger_name + str(*args) + RST
-        self.__logger.warning(mystr)
+        mystr = YEL + "[%s] " % self.logger_name + str(*args) + RST
+        self.logger.warning(mystr)
 
     def error(self, *args, exception: any = False):
-        mystr = "[%s] " % self.__logger_name + str(*args)
-        self.__logger.error(RED + mystr + RST)
+        mystr = "[%s] " % self.logger_name + str(*args)
+        self.logger.error(RED + mystr + RST)
         if exception:
             if isinstance(exception(), Exception):
                 raise exception(mystr)
@@ -180,15 +180,15 @@ class LoggerSuperclass:
 
 
     def debug(self, *args):
-        mystr = self.__log_colour + "[%s] " % self.__logger_name + str(*args) + RST
-        self.__logger.debug(mystr)
+        mystr = self.__log_colour + "[%s] " % self.logger_name + str(*args) + RST
+        self.logger.debug(mystr)
 
     def info(self, *args):
-        mystr = self.__log_colour + "[%s] " % self.__logger_name + str(*args) + RST
-        self.__logger.info(mystr)
+        mystr = self.__log_colour + "[%s] " % self.logger_name + str(*args) + RST
+        self.logger.info(mystr)
 
     def setLevel(self, level):
-        self.__logger.setLevel(level)
+        self.logger.setLevel(level)
 
 
 def reverse_dictionary(data):
