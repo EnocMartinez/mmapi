@@ -76,15 +76,21 @@ def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str,
     csv_filename = sensor_name + "_" + init + "_to_" + end + ".csv"
 
     log.info(f"Creating {csv_filename}...")
-    sta_df.to_csv(csv_filename)
 
+    if usecs:
+        time_format = "%Y-%m-%dT%H:%M:%S.%fZ"
+    else:
+        time_format = "%Y-%m-%dT%H:%M:%SZ"
+
+    sta_df.to_csv(csv_filename, date_format=time_format)
 
     if do_not_send:
         log.warning("Assuming files are already in the server!")
     else:
         log.info("Sending all files")
         dc.fileserver.bulk_send(list(fs_df["src"]), list(fs_df["dst"]))
-    bulk_load_data(csv_filename, secrets["sensorthings"], "", sensor_name, "files", usecs=usecs)
+
+    bulk_load_data(csv_filename, secrets["sensorthings"], "", sensor_name, "files", foi_name, usecs=usecs)
 
 
 

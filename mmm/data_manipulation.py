@@ -14,12 +14,11 @@ import rich
 from rich.progress import Progress
 from mmm.common import qc_flags, assert_type
 import numpy as np
-import time
 import gc
 from mmm.parallelism import multiprocess
 
 
-def open_csv(csv_file, time_format="%Y-%m-%d %H:%M:%S", time_range=[], format=False) -> pd.DataFrame:
+def open_csv(csv_file, time_format="", time_range=[], format=False) -> pd.DataFrame:
     """
     Opens a CSV datasets and arranges it to be processed and inserted
     :param csv_file: CSV file to process
@@ -31,15 +30,34 @@ def open_csv(csv_file, time_format="%Y-%m-%d %H:%M:%S", time_range=[], format=Fa
     if "timestamp" not in df.columns:
         df = df.rename(columns={df.columns[0]: "timestamp"})  # rename first column to timestamp
 
-    try:
+    if time_format:
         df["timestamp"] = pd.to_datetime(df["timestamp"], format=time_format)
-    except ValueError:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], format="%Y-%m-%dT%H:%M:%Sz")
-    df = df.set_index("timestamp")
+
+    else:  # Guess the time format
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        time_formats = [
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%Sz",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y/%m/%d %H:%M:%S",
+            "%d/%m/%Y %H:%M:%S"
+        ]
+        opened = False
+        for fmt in time_formats:
+            try:
+                df = open_csv(csv_file, time_format=fmt)
+                opened = True
+                break
+            except ValueError:
+                rich.print(f"[yellow]Could not parse time with format '{time_format}'")
+                continue
+
+        if not opened:
+            raise ValueError("Could not open CSV file!")
 
     if format:
         df = df.sort_index(ascending=True)
-        #df = df.dropna()
+
         try:
             df = df["2000-01-01":]
         except Exception as e:
@@ -50,7 +68,6 @@ def open_csv(csv_file, time_format="%Y-%m-%d %H:%M:%S", time_range=[], format=Fa
 
     if time_range:
         df = df[time_range[0]:time_range[1]]
-
     for var in df.columns:
         if var.endswith("_QC"):
             df[var] = df[var].replace(np.nan, -1)
@@ -536,6 +553,80 @@ def slice_dataframes(df, max_rows=-1, frequency=""):
     rich.print("[green]sliced!")
     return dataframes
 
+def detect_data_gaps_direct(df, reference):
+    """
+    Detects the data gaps directly by comparing which timestamps in df are not in reference.
+    :param df: data to be processed
+    :param reference: already existing data
+    :return: dataframe with the data from df that are not in reference
+    """
+    # Create dummy 't' columm without timezone and convert to index (pandas doesn't like diff with tz-aware dataframes)
+    reference["t"] = reference.index.values
+    reference["t"] = reference["t"].dt.tz_localize(None)
+    reference = reference.reset_index()
+    reference = reference.set_index("t")
+
+    df["t"] = df.index.values
+    df["t"] = df["t"].dt.tz_localize(None)
+    df = df.reset_index()
+    df = df.set_index("t")
+
+    df = df.loc[df.index.difference(reference.index)]  # keep only different indexes
+
+    df = df.set_index("timestamp")  # Now recover original timestamp index
+    return df
+
+def detect_data_gaps_by_period(df, reference, period="1h"):
+    """
+    Detects the data gaps in reference and retunrs a dataframe with is a subset of df filling the gaps. The data may
+    have slightly different time base, so the period parameter is used to resample the reference and detect the gaps
+
+    if df:
+        timestamp             value
+        2020-01-01 00:00:00     1.0
+        2020-01-01 01:23:00     1.0
+        2020-01-01 02:34:00     1.0
+
+    and reference:
+
+        timestamp             value
+        2020-01-01 00:30:00     1.0
+        2020-01-01 01:00:00     1.0
+        2020-01-01 01:30:00     1.0
+
+    the result will be:
+
+        timestamp             value
+        2020-01-01 01:30:00     1.0
+
+
+    :param df: data to be processed.
+    :param reference: data already injected
+    :param period: periods in which to check
+    :return:
+    """
+    reference = reference.copy()
+    reference["value"] = 1.0
+    avg_ref = reference.resample(period).mean()  # resample to the same period as the dataframe
+    avg_ref = avg_ref.dropna(how="any")
+
+    df["timebase"] = df.index.floor(period)  # calculate the timebase with the resampling period
+
+    # Force no timezone, pandas doesn't like .isin with tz-aware dataframes
+    df["timebase"] = df["timebase"].dt.tz_localize(None)
+    avg_ref.index = avg_ref.index.tz_localize(None)
+
+    # If the timebase is in the reference, mark it to be discarded
+    df["discard"] = False
+    df["discard"] = df["timebase"].isin(avg_ref.index.values)
+
+    df = df[df["discard"] == False]  # keep only data which is not in any timebase in the reference
+
+    del df["discard"]
+    del df["timebase"]
+
+    return df
+
 
 def slice_dataframe_by_columns(df, columns: list):
     """
@@ -544,9 +635,7 @@ def slice_dataframe_by_columns(df, columns: list):
     :param columns: List of columns to keep
     :return: dataframe only with selected columns
     """
-
     df = df.copy()
-
     for c in df.columns:
         if c not in columns:
             del df[c]
@@ -567,14 +656,16 @@ def merge_dataframes_by_columns(dataframes: list, timestamp="timestamp"):
     df = dataframes[0]
     for i in range(1, len(dataframes)):
         temp_df = dataframes[i].copy()
-        try:
-            df = df.merge(temp_df, on=timestamp, how="outer")
-        except KeyError:
-            # trying to merge using index
-            df = df.merge(temp_df, left_index=True, right_index=True, how="outer")
+        df = df.merge(temp_df, on=timestamp, how="outer")
+        # try:
+        #     df = df.merge(temp_df, on=timestamp, how="outer")
+        # except KeyError:
+        #     # trying to merge using index
+        #     df = df.merge(temp_df, left_index=True, right_index=True, how="outer")
         del temp_df
         dataframes[i] = None
         gc.collect()
+    print(df)
     return df
 
 

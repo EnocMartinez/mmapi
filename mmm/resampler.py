@@ -27,7 +27,7 @@ def resample(mc: MetadataCollector, sensor_id: str,  df, period: str):
         t = time.time()
         for i in range(len(modules)):
             print(f"Resampling columns {modules[i]} and {angles[i]}...")
-            temp_df = slice_dataframe_by_columns(df, [modules[i], angles[i], modules[i] + "_qc", angles[i] + "_qc"])
+            temp_df = slice_dataframe_by_columns(df, [modules[i], angles[i], modules[i] + "_QC", angles[i] + "_QC"])
             arguments.append([temp_df, modules[i], angles[i], "degrees", period, log_variables])
 
         dataframes = multiprocess(arguments, resample_polar_dataframe, text="resampling polar dataframe...")
@@ -44,6 +44,5 @@ def resample(mc: MetadataCollector, sensor_id: str,  df, period: str):
 
         rich.print("Individual resample finished, merging columns into a single dataframe...")
         averaged_df = merge_dataframes_by_columns(dataframes)
-        rich.print(averaged_df)
         rich.print(f"Resampling complete, took f{time.time() - t : 0.2f} seconds")
     return averaged_df

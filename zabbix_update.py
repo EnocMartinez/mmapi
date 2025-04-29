@@ -146,7 +146,12 @@ class ZabbixUpdater(LoggerSuperclass):
                 self.debug(f"Ignored sensor {sensor_id} with delayed mode")
                 continue
 
-            station_id, timestamp, active = self.mc.get_last_sensor_deployment(sensor_id)
+            try:
+                station_id, timestamp, active = self.mc.get_last_sensor_deployment(sensor_id)
+            except LookupError:
+                self.warning(f"Ignored sensor {sensor_id} with no deployment")
+                continue
+
             if active:
                 self.active_sensors.append(sensor_id)
 

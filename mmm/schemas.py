@@ -139,6 +139,7 @@ def __people_with_roles__(roles: list):
                 "roles": {
                     "type": "array",
                     "minItems": 1,
+                    "$comment": "$style=multicombobox",
                     "items": {
                         "type": "string",
                         "enum": roles
@@ -406,12 +407,11 @@ __activities = {
             "enum": __activity_type__
         },
         "appliedTo": {
-            "type": "object",
-            "properties": {
-                "@sensors": {"type": "string",  "minLength": 2},
-                "@stations": {"type": "string",  "minLength": 2},
-                "@resources": {"type": "string",  "minLength": 2}
-            }
+            "oneOf": [
+                {"type": "object", "properties": {"@sensors": {"type": "string",  "minLength": 2}}, "required":["@sensors"]},
+                {"type": "object", "properties": {"@stations": {"type": "string",  "minLength": 2}}, "required":["@stations"]},
+                {"type": "object", "properties": {"@resources": {"type": "string",  "minLength": 2}}, "required":["@resources"]}
+            ]
         },
         "fieldOfView": {
             "type": "object",
@@ -422,19 +422,11 @@ __activities = {
             "required": ["@programmes"]
         },
         "where": {
-            "type": "object",
-            "properties": {
-                "@stations": {"type": "string",  "minLength": 2},
-                "position": __coordinates__
-                #"station": {"type": "string"},
-                #"position": {"type": "string"}
-            },
-            "oneOf" : [
-                {"required": ["@stations"]},
-                {"required": ["position"]}
-            ],
-            "required": []
-        },
+            "oneOf": [
+                {"type": "object", "properties": {"@stations": {"type": "string",  "minLength": 2}}, "required": ["@stations"]},
+                {"type": "object", "properties": {"position": __coordinates__}, "required": ["position"]}
+            ]
+        }
     },
     "required": ["description", "appliedTo", "time"]
 }
@@ -454,23 +446,7 @@ __operations = {
         "@activities": __string_list__,
         "@projects": __string_list__,
         "@resources": __string_list__,
-        "additionalCosts": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "@people": {"type": "string"},
-                    "@organizations": {"type": "string"},
-                    "comment": {"type": "string"},
-                    "cost": {"type": "number"}  # in euros
-                },
-                "oneOf": [
-                    {"required": ["@organizations"], "not": {"required": ["@people"]}},
-                    {"required": ["@people"], "not": {"required": ["@organizations"]}}
-                ],
-                "required": ["comment"]
-            }
-        }
+        "comment": {"type": "string"}
     },
     "required": ["description", "timeRange", "type", "participants", "@activities"],
 }
@@ -509,7 +485,7 @@ __units = {
     "$id": "mmm:units",
     "type": "object",
     "properties": {
-        "name": {"type": "string", "definition": "units name", "$comment": "VOCAB:P06:prefLabel"},
+        "name": {"type": "string", "definition": "units name", "$comment": "VOCAB=P06:prefLabel"},
         "symbol": {"type": "string"},
         "definition": {"type": "string"},
         "type": {"type": "string", "enum": __unit_type}

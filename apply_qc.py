@@ -33,30 +33,8 @@ def apply_qc_to_csv(mc: mmm.MetadataCollector, inp, out, sensor_id, save="")->pd
             qc_params = mc.get_document("qualityControl", var["@qualityControl"])
             qc_conf[var["@variables"]] = {"qartod": qc_params["qartod"]}
 
-    if inp.endswith(".csv"):
-        opened = False
-        time_formats = [
-            "%Y-%m-%d %H:%M:%S%z",
-            "%Y-%m-%dT%H:%M:%Sz",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y/%m/%d %H:%M:%S",
-            "%d/%m/%Y %H:%M:%S"
-        ]
-        for time_format in time_formats:
-            try:
-                rich.print(f"[cyan]Opening with time format {time_format}")
-                df = open_csv(inp, time_format=time_format)
-                opened = True
-                rich.print("[green]CSV opened!")
-                break
-            except ValueError:
-                rich.print(f"[yellow]Could not parse time with format '{time_format}'")
-                continue
-        if not opened:
-            raise ValueError("Could not open CSV file!")
-    else:
-        raise ValueError("Extensions Not implemented")
-
+    df = open_csv(inp)
+    df = df.set_index("timestamp")
     if save:
         if sensor["#id"] not in save:
             save = os.path.join(save, sensor["#id"])

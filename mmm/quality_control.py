@@ -80,7 +80,7 @@ def save_figure(fig, varname, test_name, df, folder="qc_output"):
     # dataframes should be sliced by month, so create a filename with YYYY-MM
     path = os.path.join(folder, varname, test_name)
     os.makedirs(path, exist_ok=True)
-    date = np.datetime_as_string(df.index.values[0], unit="M")
+    date = np.datetime_as_string(df.index.values[0], unit="ME")
     filename = varname + "_" + test_name + "_" + date + ".png"
     filename = os.path.join(path, filename)
     plt.legend(loc="lower right")

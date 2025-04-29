@@ -70,7 +70,7 @@ if __name__ == "__main__":
         df = merge_dataframes(dataframes, sort=True)
         df.to_csv(args.output)
 
-    rich.print("Sort dataframe by time...", end="")
+
     df = open_csv(args.output, format=True)
-    df.to_csv(args.output)
+    df.to_csv(args.output, index=False)
     rich.print("[green]Done!")

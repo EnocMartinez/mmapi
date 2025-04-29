@@ -14,6 +14,7 @@ import rich
 from mmm import init_metadata_collector, setup_log
 from mmm.data_manipulation import open_csv
 from mmm.resampler import resample
+import pandas as pd
 
 if __name__ == "__main__":
     # Adding command line options #
@@ -22,7 +23,8 @@ if __name__ == "__main__":
     argparser.add_argument("output", help="Output file", type=str)
     argparser.add_argument("sensor", help="SensorID", type=str)
     argparser.add_argument("--period", help="Resampling period (defaults to 30 min)", type=str, default="30min")
-    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets-test.yaml")
+    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets.yaml")
+    argparser.add_argument("-p", "--profiles", help="process as profile data", action="store_true")
     args = argparser.parse_args()
 
     log = setup_log("resampler")
@@ -34,7 +36,20 @@ if __name__ == "__main__":
 
     rich.print("[green]Resampling dataset to %s..." % args.period)
     df = open_csv(args.input)
-    avg_df = resample(mc, args.sensor, df, args.period)
+    df = df.set_index("timestamp")
+    df = df.sort_index()
+
+    if args.profiles:
+        depths = df["depth"].unique()
+        averages = []
+        for depth in depths:
+            rich.print(f"Averaging data at {depth} m depth")
+            ddf = df[df["depth"] == depth]
+            avg_df = resample(mc, args.sensor, ddf, args.period)
+            averages.append(avg_df)
+        avg_df = pd.concat(averages)
+    else:
+        avg_df = resample(mc, args.sensor, df, args.period)
 
     if args.output:
         print("Saving to file %s..." % args.output, end="")

@@ -257,7 +257,6 @@ class DataCollector(LoggerSuperclass):
         if not time_end.tzinfo:
             time_end = pd.Timestamp.tz_localize(time_end, "utc")
 
-
         if time_start and time_end and time_start > time_end:
             raise ValueError(f"Time start={time_start} greater than time end={time_end}")
 
@@ -353,6 +352,8 @@ class DataCollector(LoggerSuperclass):
                 time_end = ctime_end
                 self.warning(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
         # Generate the dataset filename
+
+
         if not fmt:
             fmt = service["format"]
         else:
@@ -413,7 +414,6 @@ class DataCollector(LoggerSuperclass):
                 if "fieldOfView" not in deployment.keys():
                     self.error(f"Deployment has no fieldOfView! sensor={sensor_name} activity_id={deployment['id']}",
                                exception=ValueError)
-                rich.print(deployment)
                 if conf["constraints"]["fieldOfView"]["@programmes"] == deployment["fieldOfView"]["@programmes"]:
                     if deployment["end"]:
                         end = deployment["end"]
@@ -426,7 +426,7 @@ class DataCollector(LoggerSuperclass):
 
         else:
             time_periods = [(time_start, time_end)]
-        rich.print(f"Sensor {sensor_name} time periods {time_periods}")
+        self.info(f"Sensor {sensor_name} time periods {time_periods}")
         dataframes = []
 
         for time_start, time_end in time_periods:
@@ -587,7 +587,7 @@ class DataCollector(LoggerSuperclass):
         if not sensor_dataframes:
             return pd.DataFrame()  # return empty dataframe
         df = merge_dataframes_by_columns(sensor_dataframes)
-        df = df.rename(columns={"timestamp": "TIME"})
+        df = df.rename(columns={"timestamp": "TIME", "depth": "DEPTH"})
         df = df.set_index("TIME")
         df = df.sort_index(ascending=True)
         return df
@@ -677,9 +677,14 @@ class DataCollector(LoggerSuperclass):
                         and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
                 ''')
             df = self.sta.dataframe_from_query(q, debug=False)
+            # b = df.copy(deep=True)
+            # b = df.set_index("timestamp", inplace=False)
+            # print(b["2021-01-24T23:50:00Z":"2021-01-24T23:59:13Z"])
             sensor_dataframes.append(df)
+
         df = merge_dataframes_by_columns(sensor_dataframes, timestamp=["timestamp", "depth"])
-        df = df.rename(columns={"timestamp": "TIME"})
+        print(df)
+        df = df.rename(columns={"timestamp": "TIME", "depth": "DEPTH"})
         df = df.set_index("TIME")
         df = df.sort_index(ascending=True)
         return df
@@ -804,6 +809,13 @@ class DataCollector(LoggerSuperclass):
         self.info("Generating filename...")
         filename = self.dataset_filename(conf, "netcdf", time_start, time_end)
         self.info("Calling NetCDF wrapper...")
+        for idx, (data, meta) in enumerate(zip(dataframes, metadata)):
+            data.to_csv(f"data_{idx:02d}.csv")
+            with open(f"meta_{idx:02d}.json", "w") as f:
+                import json
+                f.write(json.dumps(meta, indent=2))
+
+
         filename = self.call_dataset_generator(dataframes, metadata, output=filename)
         self.info(f"Dataset {filename} generated!")
         return filename
@@ -831,6 +843,10 @@ class DataCollector(LoggerSuperclass):
         except KeyError:
             merge_sensors = False
             pass
+
+        if all([df.empty for df in dataframes]):
+            self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
+            raise LookupError("no data")
 
         if merge_sensors:
             # If merge sensors, merge dataframe by index ignoring SENSOR_ID
@@ -1040,7 +1056,6 @@ class DataCollector(LoggerSuperclass):
                 "*sdn_parameter_uri": variable["definition"],
                 "~sdn_uom_uri": units[var_id]["definition"],
                 "~standard_name": variable["standard_name"],
-                "~standard_name_uri": variable["standard_name"]
             }
         sensor_metadata = {
             "*sensor_model_uri": sensor["model"]["definition"],
@@ -1074,7 +1089,7 @@ class DataCollector(LoggerSuperclass):
         """
         Takes a dataset in the FileServer and publish it to CKAN as a resource
         """
-        rich.print(f"UPLOADING FILE TO CKAN {dataset.url}")
+        self.info(f"Uploading file to ckan {dataset.url}")
         assert type(ckan) is CkanClient
         assert type(dataset) is DatasetObject
 
@@ -1105,5 +1120,5 @@ class DataCollector(LoggerSuperclass):
         if not self.emso:
             self.emso = emso_metadata_harmonizer.metadata.EmsoMetadata()
         dataframes = [df.reset_index() for df in dataframes]
-        mh.generate_dataset(dataframes, metadata, output=output, emso_metadata=self.emso, multisensor_metadata=True)
+        mh.generate_dataset(dataframes, metadata, output=output, emso_metadata=self.emso)
         return output

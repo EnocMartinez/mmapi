@@ -20,8 +20,7 @@ import os
 
 
 def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, secrets,
-                     current=False, format:str= "", verbose=False, erddap_config=False, log=None, ckan=None
-                     ) -> list:
+                     current=False, format:str= "", verbose=False, erddap_config=False, log=None, ckan=None) -> list:
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -54,6 +53,7 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
     log.info(f"Generated {len(datasets)} data files")
     for dataset in datasets:
         dataset.deliver(fileserver=dc.fileserver)
+
     dataset = datasets[-1]
 
     if service_name == "erddap" and erddap_config:
@@ -105,7 +105,6 @@ if __name__ == "__main__":
     argparser.add_argument("-f", "--format",type=str,  required=False, default="",
                            help="Suggest format such as netcdf, csv, etc. May not work for all datasets")
 
-
     args = argparser.parse_args()
 
     if args.list:
@@ -121,7 +120,6 @@ if __name__ == "__main__":
     else:
         tstart = ""
         tend = ""
-
 
     generate_dataset(args.dataset_id, args.service, tstart, tend, args.secrets, format=args.format,
                      current=args.current, verbose=args.verbose, erddap_config=args.erddap, ckan=args.ckan)

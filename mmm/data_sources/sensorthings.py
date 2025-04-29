@@ -13,12 +13,13 @@ from rich.progress import Progress
 
 from .postgresql import PgDatabaseConnector
 from .timescaledb import TimescaleDB
-from ..common import LoggerSuperclass, reverse_dictionary, dataframe_to_dict, rm_remote_files, rsync_files, assert_dict
+from ..common import LoggerSuperclass, reverse_dictionary, dataframe_to_dict, rm_remote_files, rsync_files, assert_dict, \
+    assert_type
 import rich
 import os
 import time
 import gc
-from ..data_manipulation import slice_dataframes
+from ..data_manipulation import slice_dataframes, detect_data_gaps_by_period, detect_data_gaps_direct
 from ..schemas import mmapi_data_types
 
 
@@ -131,7 +132,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         """
         Returns a dataframe with all datastreams belonging to a sensor
         :param sensor_id: ID of a sensor
-        :return: dataframe with datastreams ID, NAME and PROPERTIES
+        :return: dataframe with datastreams ID, NAME, and PROPERTIES
         """
         query = (f'select "ID" as id , "NAME" as name, "THING_ID" as thing_id, "OBS_PROPERTY_ID" AS obs_prop_id,'
                  f' "PROPERTIES" as properties from "DATASTREAMS" where "SENSOR_ID" = {sensor_id};')
@@ -951,7 +952,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
 
     def get_datastream_id(self, sensor: str, station: str, variable: str, data_type: str,  average: str = ""):
         """
-        Returns the ID  of a datastream that matches sensor name, station and data type.
+        Returns the ID  of a datastream that matches sensor name, station, and data type.
         """
         assert data_type in mmapi_data_types
         assert type(sensor) is str
@@ -1016,7 +1017,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
     def get_datastream_config(self, sensor="", data_type="", average_period="", full_data=False):
         """
         returns a dataframe with the following columns:
-            datastream_id, datastream_name, variable_id, variable_name, data_type and average_period
+            datastream_id, datastream_name, variable_id, variable_name, data_type, and average_period
 
         :param sensor: If set, get only the datastreams for this sensor
         :param data_type: get only datastreams with this data_type
@@ -1066,4 +1067,61 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
     def check_data_integrity(self):
         self.timescale.check_data_in_observations()
         self.timescale.check_data_in_hypertables()
+
+    def get_missing_data(self, df: pd.DataFrame, sensor_name: str, average: bool, data_type: str, fill_type) -> pd.DataFrame:
+        """
+        Takes input dataframe, compares its content with the data in the database, and returns a dataframe with the
+        data not already in the database. The comparison is made by timestamp and the data type.
+        :param df: input dataframe
+        :param sensor_name: name of the sensor
+        :param average: bool to mark as average
+        :param data_type:
+        :param fill_type: 'direct' to directly fill the missing data or 'hourly' to
+        :return: dataframe with the missing data
+        """
+
+        assert_type(df, pd.DataFrame)
+        assert_type(sensor_name, str)
+        assert_type(data_type, str)
+        assert fill_type in ["direct", "hourly"], f"Expected 'direct' or 'hourly', got '{fill_type}'"
+        rows = len(df)
+        self.info("Processing dataframe to select missing data in the database")
+        df = df.sort_index(ascending=True)
+        tstart = df.index.values[0]
+        tend = df.index.values[-1]
+        self.debug(f"Getting timestamps for '{sensor_name}' type '{data_type}' from '{tstart}' to '{tend}'")
+
+        datastream_ids = self.list_from_query(f"""
+        select "ID" from "DATASTREAMS" where "SENSOR_ID" = 
+            (select "ID" from "SENSORS" where "NAME" = '{sensor_name}')
+            and "PROPERTIES"->>'dataType' = '{data_type}'
+            ;""")
+        datastream_ids = ", ".join([str(d) for d in datastream_ids])
+        if not average and data_type in ["timeseries", "profiles", "detections"]:
+            # data_type is the same as table name
+            query = f"""
+                select timestamp from {data_type} where datastream_id in ({datastream_ids}) and timestamp between
+                '{tstart}' and '{tend}' order by timestamp asc;
+            """
+        else:
+            # go to generic OBSERVATIONS table
+            query = f"""
+                select distinct "PHENOMENON_TIME_START" from "OBSERVATIONS" where "DATASTREAM_ID" in ({datastream_ids}) and
+                "PHENOMENON_TIME_START" between '{tstart}' and '{tend}' order by "PHENOMENON_TIME_START" asc;
+            """
+
+        times = self.dataframe_from_query(query)
+        if "PHENOMENON_TIME_START" in times.columns:
+            times = times.rename(columns={"PHENOMENON_TIME_START": "timestamp"})
+        times["timestamp"] = pd.to_datetime(times["timestamp"])
+        times = times.set_index("timestamp")
+
+        if fill_type == "direct":
+            df_out = detect_data_gaps_direct(df, times)
+        else:
+            df_out = detect_data_gaps_by_period(df, times, "1h")  # check data gaps by period
+
+        self.info(f"Detected {len(df_out)} rows missing, {100*(len(df_out)/rows):.02f} %%")
+        return df_out
+
 

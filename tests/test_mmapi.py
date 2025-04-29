@@ -21,6 +21,7 @@ import requests
 import numpy as np
 import pandas as pd
 import json
+import psycopg2
 from PIL import Image, ImageDraw
 
 try:
@@ -1246,12 +1247,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df["CNDC_QC"] = 1
         df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         sta = self.dc.sta
-        foi_id = sta.value_from_query('select "ID" from "FEATURES" limit 1;')
+
         filename = "test31.csv"
         df.to_csv(filename, index=False)
-        bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "SBE37", "timeseries",
-                       foi_id=foi_id, tmp_folder="./tmpdata")
-        os.remove(filename)
+        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata")
+
         self.info("Now, let's get the data and check that it's the same")
         temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
         rich.print(f"TEMP ID: {temp_id}")
@@ -1260,6 +1260,52 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         results = data["value"]
         self.assertEqual(len(results), len(tvector))
         self.dc.sta.check_data_integrity()
+
+        self.info("Let's make sure that we have an exception when try to load 2 times the same data")
+        with self.assertRaises(psycopg2.errors.UniqueViolation):
+            bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata")
+
+        self.info("Let's delete some data and try to reload the gaps with missing-data")
+        sta.exec_query(f"delete from timeseries where timestamp between '2023-02-01T00:00:00Z' and "
+                       f"'2023-02-28T00:00:00Z';", fetch=False)
+
+        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA",
+                       tmp_folder="./tmpdata", missing_data="direct")
+
+        self.info("Now, let's get the data and check that it's the same")
+        data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
+
+        # after all this, the number of rows should be the same
+        self.assertEqual(len(tvector), len(data["value"]))
+
+
+        self.info("Now, try to fill data gaps with hourly data")
+        sta.exec_query(f"delete from timeseries where timestamp between '2023-02-01T00:00:00Z' and "
+                       f"'2023-02-02T00:00:00Z';", fetch=False)
+
+        dates = pd.date_range(start='2023-01-01', end="2023-03-31", freq='30min')  # create a different frequency
+        tvector = np.arange(0, len(dates)) / 1000
+        # Create a pandas DataFrame
+        df = pd.DataFrame({
+            'timestamp': dates,
+            "TEMP": np.sin(2 * np.pi * frequency * tvector),
+            "CNDC": np.cos(2 * np.pi * frequency * tvector)
+        })
+        df["TEMP_QC"] = 1
+        df["CNDC_QC"] = 1
+        df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        filename = "test31.csv"
+        df.to_csv(filename, index=False)
+
+        data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
+        rows_before = len(data["value"])
+        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA",
+                       tmp_folder="./tmpdata", missing_data="hourly")
+        data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
+        self.assertEqual(rows_before + 48, len(data["value"]))  # we should have now 48 more rows
+        os.remove(filename)
+
 
     def test_32_get_raw_timeseries_data_api(self):
         """get timeseries from the API"""
@@ -1298,8 +1344,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         filename = "test33.csv"
         df.to_csv(filename, index=False)
         foi_id = sta.value_from_query('select "ID" from "FEATURES" limit 1;')
-        bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "SBE37", "timeseries",
-                       foi_id=foi_id, tmp_folder="./tmpdata", average="30min")
+        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata", average="30min")
 
         os.remove(filename)
         self.info("Now, let's get the data and check that it's the same")
@@ -1405,12 +1450,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         filename = "test41.csv"
         df.to_csv(filename)
         with self.assertRaises(AssertionError):
-            bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "AWAC", "banana", foi_id=foi_id,
-                           tmp_folder="./tmpdata")
+            bulk_load_data(filename, self.conf["sensorthings"], "AWAC", "banana", "OBSEA", tmp_folder="./tmpdata")
 
         # Now use the correct data type
-        bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "AWAC", "profiles", foi_id=foi_id,
-                       tmp_folder="./tmpdata")
+        bulk_load_data(filename, self.conf["sensorthings"], "AWAC", "profiles", "OBSEA", tmp_folder="./tmpdata")
         os.remove(filename)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -1461,7 +1504,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df.to_csv(filename)
 
         # Now use the correct data type
-        bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "SBE37", "profiles", foi_id=foi_id,
+        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "profiles", "OBSEA",
                        tmp_folder="./tmpdata")
         os.remove(filename)
 
@@ -1571,7 +1614,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df.to_csv(datafile)
 
         # Now, bulk load it!
-        bulk_load_data(datafile, self.conf["sensorthings"], self.sta_url, "IPC608", "files", tmp_folder="./tmpdata")
+        bulk_load_data(datafile, self.conf["sensorthings"], "IPC608", "files", "OBSEA",
+                       tmp_folder="./tmpdata")
         os.remove(datafile)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -1602,7 +1646,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         datafile = "test51-inference.csv"
         df.to_csv(datafile)
 
-        bulk_load_data(datafile, self.conf["sensorthings"], self.sta_url, "IPC608", "files", tmp_folder="./tmpdata")
+        bulk_load_data(datafile, self.conf["sensorthings"], "IPC608", "files", "OBSEA",
+                       tmp_folder="./tmpdata")
         os.remove(datafile)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -1637,7 +1682,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df = pd.DataFrame(data)
         datafile = "test51-detections.csv"
         df.to_csv(datafile)
-        bulk_load_data(datafile, self.conf["sensorthings"], self.sta_url, "IPC608", "detections",
+        bulk_load_data(datafile, self.conf["sensorthings"], "IPC608", "detections", "OBSEA",
                        tmp_folder="./tmpdata")
         os.remove(datafile)
 

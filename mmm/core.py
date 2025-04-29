@@ -133,7 +133,17 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
             sensors = doc["@sensors"]
 
             station = mc.get_station(doc["@stations"])
-            latitude, longitude, depth = get_station_coordinates(mc, station)
+
+            # If we have a timeRange constraint, get the timestamp of the deployment to query the station position
+            try:
+                start, end = doc["constraints"]["timeRange"].split("/")
+                start = pd.Timestamp(start)
+                end = pd.Timestamp(end)
+                timestamp = start + (end - start) / 2 # Get the middle point of the time range
+            except KeyError:
+                timestamp = None
+
+            latitude, longitude, depth = get_station_coordinates(mc, station, timestamp=timestamp)
 
             extras = {
                 "station": station["#id"],
@@ -184,7 +194,6 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
     """
     Propagates info at MetadataCollctor the SensorThings API
     """
-
     assert (type(dc) is DataCollector)
     assert (type(collections) is list)
     mc = dc.mc
@@ -388,8 +397,8 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                     exit(-1)
 
 
-def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, data_type, foi_name: str, average="",
-                   usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data") -> bool:
+def bulk_load_data(filename: str, psql_conf: dict, sensor_name: str, data_type, foi_name: str, average="",
+                   usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data", missing_data:str ="") -> bool:
     """
     This function performs a bulk load of the data contained in the input file
 
@@ -402,39 +411,17 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
     rich.print(f"    average={average}")
     assert data_type in mmapi_data_types, f"data_type={data_type} not valid!"
 
-
-
-
     if filename.endswith(".csv"):
-        opened = False
-        time_formats = [
-            "%Y-%m-%d %H:%M:%S%z",
-            "%Y-%m-%dT%H:%M:%Sz",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y/%m/%d %H:%M:%S",
-            "%d/%m/%Y %H:%M:%S",
-            "%Y-%m-%d %H:%M:%S.%f",
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        ]
-        for time_format in time_formats:
-            try:
-                rich.print(f"[cyan]Opening with time format {time_format}")
-                df = open_csv(filename, time_format=time_format)
-                opened = True
-                rich.print("[green]CSV opened!")
-                break
-            except ValueError:
-                rich.print(f"[yellow]Could not parse time with format '{time_format}'")
-                continue
-        if not opened:
-            raise ValueError("Could not open CSV file!")
-
+        df = open_csv(filename)
     else:
         rich.print(f"[red]extension {filename.split('.')[-1]} not recognized")
         raise ValueError("Invalid extension")
 
     if df.empty:
         raise ValueError("Empty dataframe!")
+
+    df = df.set_index("timestamp")
+    df = df.sort_index()
 
     if no_qc:
         for var in df.columns:
@@ -458,7 +445,7 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
         df = df.reset_index()
         df = df.set_index("timestamp")
 
-    # Force qc in upper case -> TEMP_qc -> TEMP_QC
+    # Force qc in the upper case -> TEMP_qc -> TEMP_QC
     for col in df.columns:
         if col.endswith("_qc"):
             df = df.rename(columns={col: col.replace("_qc", "_QC")})
@@ -466,9 +453,12 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
     db = SensorThingsApiDB(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger(), timescaledb=True)
 
+    if missing_data:
+        df = db.get_missing_data(df, sensor_name, bool(average), data_type, missing_data)
+        if df.empty:
+            raise ValueError("No missing data found!")
 
     foi_id = db.value_from_query(f'select "ID" from "FEATURES" where "NAME" = \'{foi_name}\';')
-
 
     if data_type == "timeseries":
         if not average:  # timeseries with full data

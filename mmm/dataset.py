@@ -236,7 +236,7 @@ class DataExporter(LoggerSuperclass):
         # TODO: This only works if FileServer and ERDDAP are on the same VM
         if fileserver:
             assert type(fileserver) is FileServer, "Expected FileServer object"
-            assert fileserver.host == self.host, "DataExporter and FileServer have different hosts, not implemented"
+            # assert fileserver.host == self.host, f"DataExporter ({fileserver.host}) and FileServer ({self.host})have different hosts, not implemented "
 
         self.info(f"Delivering {os.path.basename(filename)} to {self.host}:{self.path}")
 
@@ -247,7 +247,7 @@ class DataExporter(LoggerSuperclass):
         # First, construct the path
         path = self.path  # start with base path
         path = self.generate_path(path, self.period, timestamp)
-        if fileserver:
+        if fileserver and fileserver.host == self.host:
             result = fileserver.send_file(path, filename, indexed=url_required)
         else:
             result = send_file(filename, path, self.host)
