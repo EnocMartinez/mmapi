@@ -334,6 +334,26 @@ def check_url(url):
         return False
 
 
+def download_file(url: str, output: str):
+    assert_type(url,  str)
+    assert_type(output, str)
+    if not os.path.exists(os.path.dirname(output)):
+        os.makedirs(os.path.dirname(output))
+    # Send a GET request to the URL
+    response = requests.get(url, stream=True)
+
+    # Check if the request was successful
+    if response.status_code == 200:
+        # Open the local file for writing
+        with open(output, "wb") as file:
+            # Write the file in chunks to avoid memory overload
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:  # Only write if the chunk is not empty
+                    file.write(chunk)
+    else:
+        raise ValueError(f"Could not donwload file {url}, http_code = {response.status_code}")
+
+
 def detect_common_path(paths):
     """
     Returns the common prefix in a list of strings

@@ -10,7 +10,6 @@ created: 24/5/24
 import pandas as pd
 import numpy as np
 from rich.progress import Progress
-
 from .postgresql import PgDatabaseConnector
 from .timescaledb import TimescaleDB
 from ..common import LoggerSuperclass, reverse_dictionary, dataframe_to_dict, rm_remote_files, rsync_files, assert_dict, \
@@ -132,7 +131,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         """
         Returns a dataframe with all datastreams belonging to a sensor
         :param sensor_id: ID of a sensor
-        :return: dataframe with datastreams ID, NAME, and PROPERTIES
+        :return: dataframe with datastreams ID, NAME and PROPERTIES
         """
         query = (f'select "ID" as id , "NAME" as name, "THING_ID" as thing_id, "OBS_PROPERTY_ID" AS obs_prop_id,'
                  f' "PROPERTIES" as properties from "DATASTREAMS" where "SENSOR_ID" = {sensor_id};')
@@ -952,7 +951,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
 
     def get_datastream_id(self, sensor: str, station: str, variable: str, data_type: str,  average: str = ""):
         """
-        Returns the ID  of a datastream that matches sensor name, station, and data type.
+        Returns the ID  of a datastream that matches sensor name, station and data type.
         """
         assert data_type in mmapi_data_types
         assert type(sensor) is str

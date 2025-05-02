@@ -117,17 +117,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         log.info("Setting up system start docker compose... (this may take a while)")
         run_subprocess("docker compose up -d --build", fail_exit=True)
 
-        log.info("Setup Metadata Collector...")
-        cls.mc = init_metadata_collector(conf, log=log)
-        cls.log = log
-        log.info("Setup Data Collector...")
-        cls.dc = init_data_collector(conf, log, mc=cls.mc)
-        cls.stadb = cls.dc.sta
-
-        log.info("Clearing Metadata DB database...")
-        cls.mc.drop_all()
-        cls.dc.sta.drop_all()
-
         # make sure that all servieces are up and running with at least a quick get
         urls = {
             "ERDDAP": "http://localhost:8090/erddap/index.html",
@@ -160,11 +149,25 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # If success, we should have now the API key in the ckan.key file
         with open("ckan.key") as f:
             ckan_key = f.read().strip()
-        os.remove("ckan.key")
+
 
         if len(ckan_key) < 10:
             raise ValueError(f"CKAN TOKEN too short! '{ckan_key}'")
-        cls.ckan = CkanClient(cls.mc, cls.conf["ckan"]["url"], ckan_key)
+        conf["ckan"]["api_key"] = ckan_key
+
+        log.info("Setup Metadata Collector...")
+        cls.mc = init_metadata_collector(conf, log=log)
+        cls.log = log
+        log.info("Setup Data Collector...")
+        cls.dc = init_data_collector(conf, log, mc=cls.mc)
+        cls.stadb = cls.dc.sta
+
+        log.info("Clearing Metadata DB database...")
+        cls.mc.drop_all()
+        cls.dc.sta.drop_all()
+        cls.ckan = cls.dc.ckan
+
+        #cls.ckan = CkanClient(cls.mc, cls.conf["ckan"]["url"], ckan_key)
 
     def test_01_launch_metadata_api(self):
         """Run all tests for MMAPI in a sequential manner"""
@@ -1012,18 +1015,29 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             },
             "export": {
                 "erddap": {
-                    "host": "localhost",
-                    "fileTreeLevel": "monthly",
-                    "path": "./datasets",
-                    "period": "daily",
-                    "format": "netcdf"
+                    "resources": [{
+                        "host": "localhost",
+                        "path": "./datasets",
+                        "period": "daily",
+                        "format": "netcdf"
+                    }]
                 },
                 "fileserver": {
-                    "host": "localhost",
-                    "fileTreeLevel": "none",
-                    "path": "/var/tmp/mmapi/volumes/files/datasets",
-                    "period": "yearly",
-                    "format": "netcdf"
+                    "resources": [{
+                        "host": "localhost",
+                        "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
+                        "period": "yearly",
+                        "format": "netcdf",
+                        "resource_id": "netcdf_dataset"
+                    }]
+                },
+                "ckan": {
+                    "resources": [{
+                        "link": "$fileserver/netcdf_dataset",
+                        "resource_id": "obsea_ctd_full_netcdf",
+                        "name": "CTD data at OBSEA observatory full data",
+                        "description": "data from various CTD sensors at OBSEA observatory full data"
+                    }]
                 }
             },
             "contacts": [
@@ -1064,16 +1078,29 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             },
             "export": {
                 "erddap": {
-                    "host": "localhost",
-                    "path": "./datasets",
-                    "period": "daily",
-                    "format": "netcdf"
+                    "resources": [{
+                        "host": "localhost",
+                        "path": "./datasets",
+                        "period": "daily",
+                        "format": "netcdf"
+                    }]
                 },
                 "fileserver": {
-                    "host": "localhost",
-                    "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
-                    "period": "yearly",
-                    "format": "netcdf"
+                    "resources": [{
+                        "host": "localhost",
+                        "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_30min",
+                        "period": "yearly",
+                        "format": "netcdf",
+                        "resource_id": "netcdf_dataset"
+                    }]
+                },
+                "ckan": {
+                    "resources": [{
+                        "link": "$fileserver/netcdf_dataset",
+                        "resource_id": "obsea_ctd_30min_netcdf",
+                        "name": "CTD data at OBSEA observatory 30 min average",
+                        "description": "data from various CTD sensors at OBSEA observatory averaged every 30min"
+                    }]
                 }
             },
             "contacts": [
@@ -1090,12 +1117,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "role": "RightsHolder"
                 }
             ],
-            "funding": {
-                "@projects": [
-                    "Geo-INQUIRE"
-                ]
-            }
+            "funding": { "@projects": ["Geo-INQUIRE"] }
         }  # obsea_ctd_30min
+
         self.mc.insert_document("datasets", d)
 
         d = {
@@ -1111,17 +1135,22 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             },
             "dataType": "files",
             "export": {
-                "erddap": {
-                    "host": "localhost",
-                    "path": "./erddapData/IPC608_pics",
-                    "period": "daily",
-                    "format": "netcdf"
-                },
                 "fileserver": {
-                    "host": "localhost",
-                    "path": "/var/tmp/mmapi/volumes/files/datasets/IPC608_pics",
-                    "period": "yearly",
-                    "format": "zip"
+                    "resources": [{
+                        "host": "localhost",
+                        "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
+                        "period": "yearly",
+                        "format": "zip",
+                        "resource_id": "netcdf_dataset"
+                    }]
+                },
+                "ckan": {
+                    "resources": [{
+                        "link": "$fileserver/netcdf_dataset",
+                        "resource_id": "IPC608_pics",
+                        "name": "Pictures from camera IPC608 at OBSEA",
+                        "description": "pictures taken from a IPC608 camera at OBSEA"
+                    }]
                 }
             },
             "contacts": [
@@ -1794,7 +1823,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             print(csv_dataset)
         self.assertTrue(check_url(csv_dataset.url))
 
-        self.dc.upload_datafile_to_ckan(self.ckan, csv_dataset)
+        self.dc.generate_dataset(dataset_id, "ckan", "2020-01-01", "2021-01-01", fmt="csv")
 
         # Export NetCDF
         nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", "2020-01-01", "2020-02-01")
@@ -1802,6 +1831,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             nc_dataset.deliver(fileserver=self.dc.fileserver)
             self.assertTrue(check_url(nc_dataset.url))
             self.dc.upload_datafile_to_ckan(self.ckan, nc_dataset)
+
+        self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2020-02-01")
 
         # Force error in format
         # Export NetCDF
@@ -1813,6 +1844,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             zip_dataset.deliver(self.dc.fileserver)
             self.assertTrue(check_url(zip_dataset.url))
             self.dc.upload_datafile_to_ckan(self.ckan, zip_dataset)
+
+        self.dc.generate_dataset("IPC608_pics", "ckan", "2020-01-01", "2020-02-01")
 
     def test_80_config_erddap(self):
         """creates a dataset and upload it to ERDDAP"""
@@ -1879,6 +1912,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # for volume in cls.docker_volumes:
         #     if os.path.isdir(volume):
         #         os.rmdir(volume)
+
+        os.remove("ckan.key")
 
 
 if __name__ == "__main__":

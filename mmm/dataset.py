@@ -14,7 +14,7 @@ from datetime import datetime
 import jsonschema
 import pandas as pd
 import os
-from .schemas import dataset_exporter_conf, mmm_schemas
+from .schemas import mmm_schemas
 from .fileserver import FileServer, send_file
 from emso_metadata_harmonizer import erddap_config
 import time
@@ -23,7 +23,8 @@ import logging
 
 
 class DatasetObject(LoggerSuperclass):
-    def __init__(self, conf: dict, filename: str, service_name: str, tstart: pd.Timestamp | str, tend: pd.Timestamp | str,
+    def __init__(self, conf: dict, filename: str, service_name: str, resource: dict, tstart: pd.Timestamp | str,
+                 tend: pd.Timestamp | str,
                  fmt: str, log: logging.Logger):
         """
         This object contains all the metadata related to a dataset (or data file) and provides methods to deliver,
@@ -73,7 +74,7 @@ class DatasetObject(LoggerSuperclass):
 
         # Store the configuration for all export services, we don't know yet to which service the data object
         # will be delivered.
-        config = conf["export"][service_name]
+        config = resource
         self.exporter = DataExporter(config, self.dataset_id, self.log)
 
         self.delivered = False  # will be set to True once the data object has been sent
@@ -215,7 +216,6 @@ class DataExporter(LoggerSuperclass):
         Class to export datasets from a datasource and deliver them to the proper service
         """
         LoggerSuperclass.__init__(self, log, "Exporter", colour=GRN)
-        jsonschema.validate(conf, schema=dataset_exporter_conf)
         self.period = conf["period"]
         self.host = conf["host"]
         self.format = conf["format"]

@@ -131,7 +131,8 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
             title = doc["title"]
             description = doc["summary"]
             sensors = doc["@sensors"]
-
+            # Avoid navigation in sensors
+            sensors = [s for s in sensors if not s.endswith("-navigation")]
             station = mc.get_station(doc["@stations"])
 
             # If we have a timeRange constraint, get the timestamp of the deployment to query the station position
@@ -154,6 +155,9 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
             }
             owner = ""
             # Assign projects to datasets using gruops
+            authors = []
+            roles = []
+            orcids = []
             groups = []
             if "funding" in doc.keys():
                 for project_id in doc["funding"]["@projects"]:
@@ -163,7 +167,19 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
             for contact in doc["contacts"]:
                 role = contact["role"]
                 if "@people" in contact.keys():
-                    name = mc.get_people(contact["@people"])["name"]
+                    people = mc.get_people(contact["@people"])
+                    name = people["name"]
+                    orcid = people["orcid"]
+                    role = contact["role"]
+                    if not isinstance(role, str):
+                        role = ""
+
+                    if not isinstance(orcid, str):
+                        orcid = ""
+                    roles.append(role)
+                    orcids.append(orcid)
+                    authors.append(name)
+
                 elif "@organizations" in contact.keys():
                     name = mc.get_organization(contact["@organizations"])["fullName"]
                     if role == "RightsHolder":  # assign the owner organization
@@ -175,6 +191,7 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
                     extras[role] += ", " + name
 
             if not owner:
+                mc.warning(f"Owner not detected for dataset {dataset_id}, using platform owner")
                 for contact in station["contacts"]:
                     role = contact["role"]
                     if "@organizations" in contact.keys():
@@ -185,6 +202,12 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
             if "funding" in doc.keys():
                 for project_id in doc["funding"]["@projects"]:
                     groups.append({"id": project_id.lower()})
+
+            org_name = mc.get_organization(owner)["fullName"]
+            extras["authors"] = ", ".join(authors)
+            extras["contribution"] = ", ".join(roles)
+            extras["ORCID"] = ", ".join(orcids)
+            extras["rights holder"] = org_name
 
             ckan.package_register(package_name, title, description, dataset_id, extras=extras, owner_org=owner.lower(),
                                   groups=groups)

@@ -268,7 +268,7 @@ __sensors = {
 # Processes are a rather open structure, only type and info are required, but many other can be passes as optional
 # parameters.
 __processes = {
-    "$id": "mmm:datasets",
+    "$id": "mmm:processes",
     "type": "object",
     "properties": {
         "type": {"type": "string", "enum": ["average", "json"]},
@@ -316,22 +316,86 @@ dataset_exporter_formats = [
 
 # DataExporter Configuration
 # It includes the host where to deliver the file, and the export periodicity
-dataset_exporter_conf = {
+
+
+ckan_resource = {
+    "type": "object",
+    "properties": {
+        "resource_id": {"type": "string", "definition": "ID to be assigned to the resource"},
+        "name": {"type": "string", "definition": "Visible name of the resource"},
+        "description": {"type": "string", "definition": "description name of the resource"},
+        "link": {"type": "string",
+                "definition": "URL of the resource, if set to $fileserver the last resource uploaded to fileserver will be used"},
+    },
+    "required": ["resource_id", "name", "description", "link"]
+}
+
+
+
+fileserver_resource = {
+    "type": "object",
+    "properties": {
+        "resource_id": {"type": "string", "definition": "ID to be assigned to the resource"},
+        "path": {"type": "string", "definition": "path in the server filesystem"},
+        "format": {"type": "string", "definition": "format of the resource", "enum": dataset_exporter_formats},
+        "period": {"type": "string", "definition": "periodiciy of the resource (daily, monthly yearly or none).",
+                   "enum": dataset_exporter_periods},
+        "host": {"type": "string", "definition": "hostname of the fileserver"},
+    },
+    "required": ["resource_id", "path", "format", "period", "host"]
+}
+
+
+erddap_resource = {
     "type": "object",
     "properties": {
         "path": {"type": "string", "description": "path where the datasets will be exported"},
-        "fileTreeLevel": {
-            "type": "string", "enum": dataset_exporter_periods,
-            "description": "File tree level, from none to daily folders. Monthly or yearly is usually recommended"
-        },
         "host": {"type": "string", "description": "host where to deliver the file"},
         "period": {"type": "string", "enum": dataset_exporter_periods},
         "format": {"type": "string", "enum": dataset_exporter_formats},
-        "identifier": {"type": "string",
-                       "description": "override the identifier for this service, by default use dataset's #id"},
+        "dataset_id": {"type": "string", "description": "ERDDAP datasetID, if not set generic datsaet id will be used"},
     },
     "required": ["path", "host", "period", "format"]
 }
+
+fileserver_exporter_conf = {
+    "type": "object",
+    "properties": {
+        "resources": {
+            "type": "array",
+            "minItems": 1,
+            "items": fileserver_resource
+        }
+    },
+    "required": ["resources"]
+}
+
+erddap_exporter_conf = {
+    "type": "object",
+    "properties": {
+        "resources": {
+            "type": "array",
+            "minItems": 1,
+            "items": erddap_resource
+        }
+    },
+    "required": ["resources"]
+}
+
+ckan_exporter_conf = {
+    "type": "object",
+    "properties": {
+        "resources": {
+            "type": "array",
+            "minItems": 1,
+            "items": ckan_resource
+        }
+    },
+    "required": ["resources"]
+}
+
+
+
 
 __datasets = {
     "$id": "mmm:datasets",
@@ -374,10 +438,9 @@ __datasets = {
         "export": {
             "type": "object",
             "properties": {
-                # how to export dataset to the FileServer, where it can be directly downloaded by users and indexed
-                # in CKAN
-                "fileserver": dataset_exporter_conf,
-                "erddap": dataset_exporter_conf
+                "fileserver": fileserver_exporter_conf,
+                "ckan": ckan_exporter_conf,
+                "erddap": erddap_exporter_conf
             },
             "required": []
         },

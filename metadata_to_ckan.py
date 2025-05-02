@@ -9,12 +9,12 @@ license: MIT
 created: 21/09/2023
 """
 from argparse import ArgumentParser
-from mmm import CkanClient, propagate_metadata_to_ckan
 import yaml
-
-from mmm.common import run_over_ssh, run_subprocess
-from mmm.metadata_collector import init_metadata_collector
 import rich
+from mmm.metadata_collector import init_metadata_collector
+from mmm import CkanClient, propagate_metadata_to_ckan
+from mmm.common import run_over_ssh, run_subprocess, setup_log
+from mmm.fileserver import FileServer
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
@@ -28,7 +28,7 @@ if __name__ == "__main__":
         secrets = yaml.safe_load(f)["secrets"]
     collections = args.collections
     if not args.collections:
-        collections = ["datasets", "organizations"]
+        collections = ["datasets", "organizations", "projects"]
     else:
         collections = args.collections
 
@@ -36,16 +36,8 @@ if __name__ == "__main__":
 
     proj = secrets["ckan"]["project_logos"]
     org = secrets["ckan"]["organization_logos"]
+    log = setup_log("Meta2Ckan")
 
-    # ckan_host = secrets["ckan"]["host"]
-    # rich.print("Getting ckan key in a quick-and-dirty way")
-    # cmd = "docker exec ckan ckan user token add ckan_admin tk1 | tail -n 1 | sed 's/\t//g' >  ~/ckan.key"
-    # run_over_ssh(ckan_host, cmd)
-    # run_subprocess(f"scp {ckan_host}:~/ckan.key .")
-    #
-    # with open("ckan.key") as f:
-    #     key = f.read()
-    # rich.print(f"CKAN key {key}")
-
-    ckan = CkanClient(mc, secrets["ckan"]["url"], secrets["ckan"]["api_key"])
+    fileserver = FileServer(secrets["fileserver"], log)
+    ckan = CkanClient(mc, secrets["ckan"]["url"], secrets["ckan"]["api_key"], fileserver, log)
     propagate_metadata_to_ckan(mc, ckan, collections, datasets=args.datasets)
