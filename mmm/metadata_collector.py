@@ -19,7 +19,8 @@ import datetime
 import json
 import pandas as pd
 import os
-from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL, setup_log, assert_type, assert_types
+from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL, setup_log, assert_type, assert_types, \
+    check_url
 from mmm.common import LoggerSuperclass
 import psycopg2
 from psycopg2 import sql
@@ -128,6 +129,8 @@ class MetadataCollector(LoggerSuperclass):
         LoggerSuperclass.__init__(self, log, "MC", PRL)
         self.info("Initializing MetadataCollector")
 
+        self.dataset_registry_table = "fileserver_dataset_registry"
+
         self.default_author = default_author
         self.organization = organization
         self.__connection_chain = connection
@@ -139,7 +142,6 @@ class MetadataCollector(LoggerSuperclass):
         self.db_hist_name = db_name + "_hist"
         db_user = connection["db_user"]
         db_password = connection["db_password"]
-        print(db_name, db_user, host)
         log = logging.getLogger()
         try:
             self.info(f"Connecting to database '{db_name}'...")
@@ -185,8 +187,6 @@ class MetadataCollector(LoggerSuperclass):
         """
         Create database tables
         """
-
-
         table_names = self.db.list_from_query("SELECT table_name FROM information_schema.tables")
         table_names_hist = self.db_hist.list_from_query("SELECT table_name FROM information_schema.tables")
 
@@ -206,6 +206,24 @@ class MetadataCollector(LoggerSuperclass):
                 """
                 self.db.exec_query(query, fetch=False)
 
+        # Now add dataset registry
+        if self.dataset_registry_table not in table_names:
+            query = f"""
+            CREATE TABLE IF NOT EXISTS {self.dataset_registry_table}
+                (
+                    resource_id TEXT PRIMARY KEY,
+                    dataset_id TEXT NOT NULL,
+                    data_from timestamp with time zone,
+                    data_to timestamp with time zone,
+                    creation_date timestamp with time zone NOT NULL,
+                    modification_date timestamp with time zone NOT NULL,
+                    url TEXT NOT NULL,
+                    path TEXT not NULL    
+                )
+            """
+            self.db.exec_query(query, fetch=False)
+
+        # History database
         for collection in self.collection_names:
             collection = collection.lower()  # use lowercase in SQL
             if collection not in table_names_hist:
@@ -1102,6 +1120,66 @@ class MetadataCollector(LoggerSuperclass):
         history = sorted(history, key=lambda x: x['time'])
         return history
 
+    def dataset_resource_create(self, resource_id, dataset_id, tstart: str, tend: str, url, path):
+        assert_type(resource_id, str)
+        assert_type(dataset_id, str)
+        assert_type(tstart, str)
+        assert_type(tend, str)
+        assert_type(path, str)
+        assert_type(url, str)
+
+        now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        query = f"""        
+            INSERT INTO {self.dataset_registry_table} (
+                resource_id, dataset_id, data_from, data_to, creation_date, modification_date, url, path
+            ) 
+            VALUES (
+                '{resource_id}', 
+                '{dataset_id}', 
+                '{tstart}', 
+                '{tend}',
+                '{now}',
+                '{now}',
+                '{url}',
+                '{path}'
+            );
+        """
+        self.db.exec_query(query, fetch=False)
+
+    def dataset_resource_update(self, resource_id, dataset_id, tstart: str, tend: str, url, path):
+        assert_type(resource_id, str)
+        assert_type(dataset_id, str)
+        assert_type(tstart, str)
+        assert_type(tend, str)
+        assert_type(path, str)
+        assert_type(url, str)
+
+        now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        query = f"""        
+            UPDATE {self.dataset_registry_table}
+            SET
+                modification_date = '{now}',
+                path = '{path}',
+                url = '{url}'
+            WHERE
+                resource_id = '{resource_id}'
+        ;"""
+        self.db.exec_query(query, fetch=False)
+
+    def dataset_resource_exists(self, resource_id) -> bool:
+        query = f"select url from fileserver_dataset_registry where resource_id = '{resource_id}';"
+        results = self.db.list_from_query(query)
+        if len(results) > 0:
+            url = results[0]
+            if not check_url(url):
+                self.error(f"resource {resource_id} registered, but URL not reachable! Deleting from registry...")
+                self.db.exec_query(f"delete from fileserver_dataset_registry where resource_id = '{resource_id}';",
+                                fetch=False)
+                return False
+            return True
+        return False
 
 def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
     return mc.get_station_deployments(station)

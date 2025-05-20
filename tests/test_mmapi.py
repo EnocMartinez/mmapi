@@ -27,6 +27,7 @@ from PIL import Image, ImageDraw
 try:
     from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_metadata_to_ckan, \
         CkanClient, get_station_deployments
+    from mmm.common import  download_file
 except ModuleNotFoundError:
     # Get the directory of the current script
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -38,10 +39,12 @@ except ModuleNotFoundError:
 
     from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_metadata_to_sensorthings,
                      bulk_load_data, propagate_metadata_to_ckan, CkanClient, get_station_deployments)
-    from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url
+    from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url, download_file
     from mmapi import run_metadata_api
     from sta_timeseries import run_sta_timeseries_api
 
+
+logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 
 def get_json(url, params={}):
     r = requests.get(url, params=params)
@@ -74,7 +77,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             conf = yaml.safe_load(f)["secrets"]
 
         log = setup_log("mmapi-test")
-        log.setLevel(logging.DEBUG)
+        log.setLevel(logging.INFO)
         LoggerSuperclass.__init__(cls, log, "test")
 
         with open(cls.secrets) as f:
@@ -113,6 +116,18 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         # Make sure that ERDDAP has a clean datasets.xml file
         shutil.copy2("conf/datasets.xml.default", "conf/datasets.xml" )
+
+        log.info("Delete all files and folders in fileserver")
+        folder = docker_config["services"]["fileserver"]["volumes"][0].split(":")[0]
+
+        files = file_list(folder)
+        for f in files:
+            os.remove(f)
+        dirs = os.listdir(folder)
+        dirs = dir_list(folder)
+        dirs = sorted(dirs, reverse=True)
+        for d in dirs:
+            os.rmdir(d)
 
         log.info("Setting up system start docker compose... (this may take a while)")
         run_subprocess("docker compose up -d --build", fail_exit=True)
@@ -1026,7 +1041,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "resources": [{
                         "host": "localhost",
                         "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
-                        "period": "yearly",
+                        "period": "monthly",
                         "format": "netcdf",
                         "resource_id": "netcdf_dataset"
                     }]
@@ -1034,8 +1049,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "ckan": {
                     "resources": [{
                         "link": "$fileserver/netcdf_dataset",
-                        "resource_id": "obsea_ctd_full_netcdf",
-                        "name": "CTD data at OBSEA observatory full data",
+                        "title": "CTD data at OBSEA observatory full data",
                         "description": "data from various CTD sensors at OBSEA observatory full data"
                     }]
                 }
@@ -1097,8 +1111,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "ckan": {
                     "resources": [{
                         "link": "$fileserver/netcdf_dataset",
-                        "resource_id": "obsea_ctd_30min_netcdf",
-                        "name": "CTD data at OBSEA observatory 30 min average",
+                        "title": "CTD data at OBSEA observatory 30 min average",
                         "description": "data from various CTD sensors at OBSEA observatory averaged every 30min"
                     }]
                 }
@@ -1138,17 +1151,16 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "fileserver": {
                     "resources": [{
                         "host": "localhost",
-                        "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
+                        "path": "/var/tmp/mmapi/volumes/files/datasets/IPC608_pics",
                         "period": "yearly",
                         "format": "zip",
-                        "resource_id": "netcdf_dataset"
+                        "resource_id": "zip_pics"
                     }]
                 },
                 "ckan": {
                     "resources": [{
-                        "link": "$fileserver/netcdf_dataset",
-                        "resource_id": "IPC608_pics",
-                        "name": "Pictures from camera IPC608 at OBSEA",
+                        "link": "$fileserver/zip_pics",
+                        "title": "Pictures from camera IPC608 at OBSEA",
                         "description": "pictures taken from a IPC608 camera at OBSEA"
                     }]
                 }
@@ -1171,6 +1183,58 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }  # underwater pictures dataset
         self.mc.insert_document("datasets", d)
 
+
+        d = {
+            "#id": "biodiversity_datasets",
+            "title": "Biodiversity at OBSEA",
+            "summary": "Fish detections from underwater photography by an AI model",
+            "@sensors": [
+                "IPC608"
+            ],
+            "@stations": "OBSEA",
+            "dataSourceOptions": {
+                "host": "localhost"
+            },
+            "dataType": "detections",
+            "export": {
+                "fileserver": {
+                    "resources": [{
+                        "host": "localhost",
+                        "path": "/var/tmp/mmapi/volumes/files/datasets/biodiversity_datasets",
+                        "period": "yearly",
+                        "format": "csv",
+                        "resource_id": "biodiversity_dataset"
+                    }]
+                },
+                "ckan": {
+                    "resources": [{
+                        "link": "$fileserver/biodiversity_dataset",
+                        "title": "Fish detections",
+                        "description": "Fish detections in CSV format"
+                    }]
+                }
+            },
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "DataCurator"
+                },
+                {
+                    "@people": "enoc_martinez",
+                    "role": "ProjectLeader"
+                },
+
+                {
+                    "@organizations": "upc",
+                    "role": "RightsHolder"
+                }
+            ],
+            "constraints": {
+                "@processes": "YOLOv8"
+            }
+        }  # underwater pictures dataset
+        self.mc.insert_document("datasets", d)
+
     def test_20_propagate_to_sensorthings(self):
         """Propagate metadata from Metadata DB to SensorThingsAPI"""
         propagate_metadata_to_sensorthings(self.dc, [], self.conf["sensorthings"]["url"], update=True)
@@ -1189,14 +1253,14 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     def test_30_ingest_avg_timeseries_data(self):
         """Ingesting average timeseries data using the API"""
         # Generate sine wave values
-        frequency = 1
+        frequency = 3
         dates = pd.date_range(start='2024-01-01', end="2024-01-02", freq='30min')
-        tvector = np.arange(0, len(dates)) / 1000
+        tvector = np.arange(0, len(dates)) / len(dates)
         # Create a pandas DataFrame
         df = pd.DataFrame({
             'timestamp': dates,
             "TEMP": np.sin(2 * np.pi * frequency * tvector),
-            "CNDC": np.cos(2 * np.pi * frequency * tvector)
+            "CNDC": np.cos(2 * np.pi * frequency * tvector + np.pi/2)
         })
         df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         sta = self.dc.sta
@@ -1263,9 +1327,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     def test_31_bulk_load_raw_timeseries_data(self):
         """Ingesting average timeseries data using the API"""
         # Generate sine wave values
-        frequency = 1
+        frequency = 3
         dates = pd.date_range(start='2023-01-01', end="2023-03-31", freq='100s')
-        tvector = np.arange(0, len(dates)) / 1000
+        tvector = np.arange(0, len(dates)) / len(dates)
         # Create a pandas DataFrame
         df = pd.DataFrame({
             'timestamp': dates,
@@ -1335,7 +1399,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.assertEqual(rows_before + 48, len(data["value"]))  # we should have now 48 more rows
         os.remove(filename)
 
-
     def test_32_get_raw_timeseries_data_api(self):
         """get timeseries from the API"""
         temp_id = self.dc.sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
@@ -1356,7 +1419,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         dates = pd.date_range(start=tstart, end=tend, freq='30min')
         self.info(f"Bulk loading a LOT of averaged data ({len(dates)} points)")
-        tvector = np.arange(0, len(dates)) / 1000
+        tvector = np.arange(0, len(dates)) / len(dates)
         # Create a pandas DataFrame
         df = pd.DataFrame({
             'timestamp': dates,
@@ -1809,50 +1872,66 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.dc.sta.exec_query(f"delete from profiles where datastream_id = {detections_id};", fetch=False)
 
     def test_70_propagate_to_ckan(self):
-        rich.print("==== setup CKAN ====")
         propagate_metadata_to_ckan(self.mc, self.ckan, collections=[])
+
 
     def test_71_generate_fileserver_datasets(self):
         """Creating a dataset"""
         os.makedirs("datasets", exist_ok=True)
-        # Export CSV
-        dataset_id = "obsea_ctd_full"
-        csv_datasets = self.dc.generate_dataset(dataset_id, "fileserver", "2020-01-01", "2021-01-01", fmt="csv")
-        for csv_dataset in csv_datasets:
-            csv_dataset.deliver(fileserver=self.dc.fileserver)
-            print(csv_dataset)
-        self.assertTrue(check_url(csv_dataset.url))
 
-        self.dc.generate_dataset(dataset_id, "ckan", "2020-01-01", "2021-01-01", fmt="csv")
+        # Export datasets with the default format (NetCDF)
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver")
+        for nc_dataset in nc_datasets:
+            self.assertTrue(check_url(nc_dataset.url))
+
+        with self.assertRaises(ValueError):
+            self.dc.generate_dataset("obsea_ctd_full", "fileserver")
+
+        # delete one dataset and ensure that we get an error when accessing it
+        file_path = self.dc.fileserver.url2path(nc_datasets[0].url)
+        os.remove(file_path)
+        self.assertFalse(check_url(nc_datasets[0].url))
+
+        # overwrite datasets
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", overwrite=True)
+        for nc_dataset in nc_datasets:
+            self.assertTrue(check_url(nc_dataset.url))
+
+        # Export as CSV datasets
+        csv_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", fmt="csv")
+        for csv_dataset in csv_datasets:
+            self.assertTrue(check_url(csv_dataset.url))
 
         # Export NetCDF
-        nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", "2020-01-01", "2020-02-01")
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "fileserver")
         for nc_dataset in nc_datasets:
-            nc_dataset.deliver(fileserver=self.dc.fileserver)
             self.assertTrue(check_url(nc_dataset.url))
-            self.dc.upload_datafile_to_ckan(self.ckan, nc_dataset)
-
-        self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2020-02-01")
 
         # Force error in format
-        # Export NetCDF
         with self.assertRaises(AssertionError):
-            self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01", fmt="potato")
+            self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-02-01", fmt="potato")
 
         zip_datasets = self.dc.generate_dataset("IPC608_pics", "fileserver", "2020-01-01", "2020-02-01")
         for zip_dataset in zip_datasets:
-            zip_dataset.deliver(self.dc.fileserver)
+            if not zip_dataset:
+                continue
             self.assertTrue(check_url(zip_dataset.url))
-            self.dc.upload_datafile_to_ckan(self.ckan, zip_dataset)
 
+
+    def test_72_generate_ckan_datasets(self):
+        self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01") # default format
+        self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01", fmt="csv") # froce csv
+        self.dc.generate_dataset("obsea_ctd_30min", "ckan", "2020-01-01", "2021-02-01")
         self.dc.generate_dataset("IPC608_pics", "ckan", "2020-01-01", "2020-02-01")
+
 
     def test_80_config_erddap(self):
         """creates a dataset and upload it to ERDDAP"""
+
+        rich.print("")
+
         nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2020-02-01")
         for nc_dataset in nc_datasets:
-            nc_dataset.deliver()
-
             # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
             data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
             nc_dataset.configure_erddap("conf/datasets.xml", data_path)
@@ -1863,15 +1942,15 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             erddap_dataset = "mydataset.csv"
             dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
             self.info(f"Downloading dataset from erddap: {dataset_url}")
+            download_file(dataset_url, erddap_dataset)
             df = pd.read_csv(erddap_dataset)
+            print(df)
 
-    def test_80_config_erddap_with_daily_data(self):
+    def test_81_config_erddap_with_daily_data(self):
         """creates a dataset with daily files and upload it to ERDDAP"""
         nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2022-01-01", "2022-02-01")
-        for nc_dataset in nc_datasets:
-            nc_dataset.deliver()
-
-            # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
+        nc_dataset = nc_datasets[0]
+        # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
         data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
         nc_dataset.configure_erddap("conf/datasets.xml", data_path)
         nc_dataset.reload_erddap_dataset("erddapData")
@@ -1883,15 +1962,14 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         retrieve_url(dataset_url, output=erddap_dataset)
         df = pd.read_csv(erddap_dataset)
 
-
         datasets = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2022-01-01", "2022-01-01")
-        for dataset in datasets:
-            dataset.deliver()
 
 
     @classmethod
     def tearDownClass(cls):
-        cls.log.info("stopping containers")
+        os.remove("ckan.key")
+        # input("press key to remove docker volumes...")
+        # cls.log.info("stopping containers")
         # run_subprocess("docker compose down")
         # rich.print("Deleting temporal docker volumes...")
         # for volume in cls.docker_volumes:
@@ -1912,8 +1990,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # for volume in cls.docker_volumes:
         #     if os.path.isdir(volume):
         #         os.rmdir(volume)
-
-        os.remove("ckan.key")
 
 
 if __name__ == "__main__":

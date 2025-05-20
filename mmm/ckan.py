@@ -9,15 +9,14 @@ license: MIT
 created: 23/3/21
 """
 
-from argparse import ArgumentParser
-from mmm.common import normalize_string
 import requests
 import json
 import rich
-from mmm import MetadataCollector
-from mmm.common import normalize_string, LoggerSuperclass, PRL, assert_type, download_file, run_over_ssh, check_url
+from mmm.common import normalize_string, LoggerSuperclass, PRL, assert_type, download_file, run_over_ssh, check_url, \
+    file_list
+from mmm.dataset import generate_dataset_resource_id
 from mmm.fileserver import FileServer
-from mmm import MetadataCollector, DatasetObject
+from mmm import MetadataCollector
 from PIL import Image
 import logging
 import os
@@ -186,10 +185,12 @@ class CkanClient(LoggerSuperclass):
         # upload (FieldStorage (optional) needs multipart/form-data) – (optional)
 
         if self.check_if_resource_exists(resource_id):
-            rich.print(f"[cyan]Resource %s already registered, patching" % resource_id)
+            self.warning(f"Resource {resource_id} already exists, patching")
             action = "patch"
         else:
             action = "post"
+
+        self.info(f"{action.upper() + 'ing'} resource '{resource_id}' to package '{package_id}' with format {format}")
 
         datadict = {
             "id": resource_id,
@@ -371,7 +372,7 @@ class CkanClient(LoggerSuperclass):
         patch_data["id"] = id
         return self.ckan_post(url, patch_data)
 
-    def process_mmapi_dataset(self, dataset_conf: dict, datasets={}, format="") -> list:
+    def process_mmapi_dataset(self, dataset_conf: dict, datasets={}, fmt="") -> list:
         """
         Processes a dataset configured in MMAPI. The CKAN package will point to an existing file in the fileserver (or
         any other location). There are two options:
@@ -403,13 +404,16 @@ class CkanClient(LoggerSuperclass):
             }
         """
         assert_type(dataset_conf, dict)
+        resources = []
         try:
             resources = dataset_conf["export"]["ckan"]["resources"]
         except KeyError:
             self.error("exporter/ckan/resources not found in dataset config!", exception=KeyError)
+
         dataset_id = dataset_conf["#id"].lower()
+
         for resource in resources:
-            self.info(f"Registering resource {resource['name']}")
+            self.info(f"Registering resource {resource['title']}")
             # Check if url references a previous dataset
             if resource["link"].startswith("$fileserver"):
                 self.info(f"Trying to guess a dataset file stored at fileserver")
@@ -423,42 +427,39 @@ class CkanClient(LoggerSuperclass):
 
                 if not fileserver_conf:
                     self.error(f"Fileserver conf {resource['link']} not found!", exception=LookupError)
-                # Now try to guess which file is it via ls trhough ssh
+                # Now try to guess which file it is via ls through ssh
 
                 path = fileserver_conf["path"]
-                if format:
-                    extension = format
-                else:
-                    extension = fileserver_conf["format"]
+
+                if not fmt:
+                    fmt = fileserver_conf["format"]
+
+                extension = fmt
+
+                # In some cases the extension does not match tne format, process it
+                if extension.lower() == "netcdf":
+                    extension = "nc"
+
                 self.info(f"Getting number of files in {self.fileserver.host}:{path} with extension {extension}")
+                df = self.mc.db.dataframe_from_query(f"""
+                    select * from {self.mc.dataset_registry_table} where dataset_id = '{dataset_id}'; 
+                """)
+                for idx, row in df.iterrows():
 
-                if self.fileserver.host in ["localhost", "127.0.0.1"]:
-                    files = os.listdir(path)
-                else:
-                    resp = run_over_ssh(self.fileserver.host, f"ls {path}", fail_exit=True)
-                    files = [e for e in resp.split("\n") if e]
-                files = [f for f in files if f.endswith(extension)]
-                if len(files) != 1:
-                    self.error(f"Expected one file to reference, but found {len(files)}", exception=ValueError)
-
-                file_path = os.path.join(path, files[0])
-                resource_url = self.fileserver.path2url(file_path)
-                self.info(f"Found file at {file_path}")
-            else:
-                self.info(f"Trying to guess a dataset file stored at fileserver")
-                resource_url = resource["link"]
-            if not check_url(resource_url):
-                self.error(f"Resource is not available! {resource_url}")
-            # If resource has $ means a previously configured dataset
-            self.resource_create(
-                dataset_id,
-                resource["resource_id"],
-                description=resource["description"],
-                name=resource["name"],
-                resource_url=resource_url,
-                format=resource["link"].split("/")[-1].split(".")[-1]
-            )
-            self.generate_dataset_preview(dataset_id, resource["resource_id"], resource_url)
+                    if not row["path"].endswith(extension):
+                        # ignore extensions that do not match
+                        continue
+                    start = row["data_from"].strftime("%Y-%m-%d")
+                    end = row["data_to"].strftime("%Y-%m-%d")
+                    self.resource_create(
+                        dataset_id,
+                        row["resource_id"],
+                        description=resource["description"] + f" from {start} to {end}",
+                        name=resource["title"],
+                        resource_url=row["path"],
+                        format=fmt
+                    )
+                    self.generate_dataset_preview(dataset_id, row["resource_id"], row["url"])
         return []
 
     def generate_dataset_preview(self, dataset_id: str, resource_id: str, resource_url: str,

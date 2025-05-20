@@ -337,8 +337,9 @@ def check_url(url):
 def download_file(url: str, output: str):
     assert_type(url,  str)
     assert_type(output, str)
-    if not os.path.exists(os.path.dirname(output)):
-        os.makedirs(os.path.dirname(output))
+    dirname = os.path.dirname(output)
+    if dirname and not os.path.exists(dirname):
+        os.makedirs(dirname)
     # Send a GET request to the URL
     response = requests.get(url, stream=True)
 

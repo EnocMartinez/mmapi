@@ -10,10 +10,10 @@ created: 12/6/24
 """
 import logging
 from datetime import datetime
-
 import jsonschema
 import pandas as pd
 import os
+from .metadata_collector import MetadataCollector
 from .schemas import mmm_schemas
 from .fileserver import FileServer, send_file
 from emso_metadata_harmonizer import erddap_config
@@ -21,11 +21,30 @@ import time
 from mmm.common import validate_schema, LoggerSuperclass, CYN, GRN, assert_type, run_over_ssh, run_subprocess
 import logging
 
+def generate_dataset_resource_id(dataset_id: str, fmt: str,  tstart: pd.Timestamp, tend: pd.Timestamp) -> str:
+    """
+    Generates a dataset resource ID from the dataset ID, format and time range
+    :param dataset_id:
+    :param fmt:
+    :param tstart:
+    :param tend:
+    :return:
+    """
+    assert_type(dataset_id, str)
+    assert_type(fmt, str)
+    assert_type(tstart, pd.Timestamp)
+    assert_type(tend, pd.Timestamp)
+    assert dataset_id, "dataset_id cannot be empty"
+    assert fmt, "format cannot be empty"
+
+    tfmt = "%Y%m%d"
+    start = tstart.strftime(tfmt)
+    end = tend.strftime(tfmt)
+    return f"{dataset_id}_{fmt}_{start}_{end}"
 
 class DatasetObject(LoggerSuperclass):
-    def __init__(self, conf: dict, filename: str, service_name: str, resource: dict, tstart: pd.Timestamp | str,
-                 tend: pd.Timestamp | str,
-                 fmt: str, log: logging.Logger):
+    def __init__(self, mc: MetadataCollector, fileserver: FileServer, conf: dict, filename: str, service_name: str, resource: dict,
+                 tstart: pd.Timestamp | str, tend: pd.Timestamp | str, fmt: str, log: logging.Logger):
         """
         This object contains all the metadata related to a dataset (or data file) and provides methods to deliver,
         update it.
@@ -40,8 +59,12 @@ class DatasetObject(LoggerSuperclass):
         self.log = log
         LoggerSuperclass.__init__(self, log, "Dataset", colour=CYN)
 
+        assert_type(mc, MetadataCollector)
+        assert_type(fileserver, FileServer)
         assert_type(conf, dict)
         validate_schema(conf, mmm_schemas["datasets"], [])
+        self.mc = mc
+        self.fileserver = fileserver
 
         assert os.path.isfile(filename), f"file '{filename}' does not exist!"
 
@@ -59,23 +82,27 @@ class DatasetObject(LoggerSuperclass):
         self.filename = filename
         self.conf = conf
         self.dataset_id = conf["#id"]
-        self.fmt = fmt
+        if fmt:
+            self.fmt = fmt
+        else:
+            self.fmt = resource["format"]
+
         self.tstart = tstart
         self.tend = tend
         self.url = ""
-
         self.ctime = pd.Timestamp(os.path.getctime(filename))
         self.size = os.path.getsize(filename)
 
-        tfmt = "%Y-%m-%d"
-        basename = os.path.basename(filename)
-        self.data_object_id = basename + "_" + self.tstart_str(tfmt) + "_" + self.tstart_str(tfmt) + "_" + fmt
+        tfmt = "%Y%m%d"
+        start = self.tstart_str(tfmt)
+        end = self.tend_str(tfmt)
+        self.dataset_resource_id = generate_dataset_resource_id(self.dataset_id, self.fmt, self.tstart, self.tend)
         self.service_name = service_name
 
         # Store the configuration for all export services, we don't know yet to which service the data object
         # will be delivered.
         config = resource
-        self.exporter = DataExporter(config, self.dataset_id, self.log)
+        self.exporter = DataExporter(config, self.dataset_id, self.fileserver, self.log)
 
         self.delivered = False  # will be set to True once the data object has been sent
 
@@ -88,20 +115,31 @@ class DatasetObject(LoggerSuperclass):
     def tend_str(self, fmt="%Y-%m-%dT%H:%M:%SZ"):
         return self.tend.strftime(fmt)
 
-    def deliver(self, fileserver: FileServer = None):
+    def deliver(self, overwrite=False):
         """
         Delivers a dataset to the export service as configured in __init__
         :param fileserver: FileServer to convert from filesystem tu public HTTP URL. If no URL is needed, leave it blank
         :return: URL (if fileserver is passed) or filesystem path
         """
-        if fileserver:
-            assert type(fileserver) is FileServer, f"expected type FileServer, got {type(fileserver)}"
 
         if self.delivered:
             raise ValueError("Dataset already delivered!")
+
         exporter = self.exporter
-        self.url = exporter.deliver_dataset(self.filename, self.tstart, fileserver=fileserver)
+        self.url = exporter.deliver_dataset(self.filename, self.tstart)
         self.delivered = True
+
+        if self.service_name == "fileserver":
+            path = self.fileserver.url2path(self.url)
+            if self.mc.dataset_resource_exists(self.dataset_resource_id) and overwrite:
+                self.info(f"Overwriting existing dataset resource with new one: {self.dataset_resource_id} ")
+                self.mc.dataset_resource_update(self.dataset_resource_id, self.dataset_id, self.tstart_str(),
+                                            self.tend_str(), self.url, path)
+            else:
+                self.info(f"Creating new dataset resource: {self.dataset_resource_id} ")
+                self.mc.dataset_resource_create(self.dataset_resource_id, self.dataset_id, self.tstart_str(),
+                                                self.tend_str(), self.url, path)
+
         return self.url
 
     def configure_erddap(self, datasets_xml, dataset_path):
@@ -209,16 +247,27 @@ class DatasetObject(LoggerSuperclass):
         string += f"-----------------------------------------"
         return string
 
+    @staticmethod
+    def generate_resource_id(dataset_id: str, fmt: str, tstart: pd.Timestamp, tend: pd.Timestamp):
+        return generate_dataset_resource_id(dataset_id, fmt, tstart, tend)
+
 
 class DataExporter(LoggerSuperclass):
-    def __init__(self, conf, dataset_id, log):
+    def __init__(self, conf: dict, dataset_id: str, fileserver: FileServer, log: logging.Logger,):
         """
         Class to export datasets from a datasource and deliver them to the proper service
         """
+        assert_type(conf, dict)
+        assert_type(dataset_id, str)
+        assert_type(fileserver, FileServer)
+        assert_type(log, logging.Logger)
+
         LoggerSuperclass.__init__(self, log, "Exporter", colour=GRN)
         self.period = conf["period"]
         self.host = conf["host"]
         self.format = conf["format"]
+
+        self.fileserver = fileserver
 
         if self.period.lower() == "none":
             self.path = conf["path"]
@@ -227,15 +276,16 @@ class DataExporter(LoggerSuperclass):
         else:
             self.path = conf["path"]
 
-    def deliver_dataset(self, filename, timestamp: pd.Timestamp, fileserver: FileServer, url_required=True)->str:
+    def deliver_dataset(self, filename, timestamp: pd.Timestamp, url_required=True)->str:
         """
         Takes a dataset (already generated) and delivers it according to the dataset's configuration
         :param filename: dataset to deliver
         :param timestamp: timestamp used to generate folders
         """
         # TODO: This only works if FileServer and ERDDAP are on the same VM
-        if fileserver:
-            assert type(fileserver) is FileServer, "Expected FileServer object"
+        assert_type(filename, str)
+        assert_type(timestamp, pd.Timestamp)
+        assert_type(url_required, bool)
             # assert fileserver.host == self.host, f"DataExporter ({fileserver.host}) and FileServer ({self.host})have different hosts, not implemented "
 
         self.info(f"Delivering {os.path.basename(filename)} to {self.host}:{self.path}")
@@ -247,8 +297,8 @@ class DataExporter(LoggerSuperclass):
         # First, construct the path
         path = self.path  # start with base path
         path = self.generate_path(path, self.period, timestamp)
-        if fileserver and fileserver.host == self.host:
-            result = fileserver.send_file(path, filename, indexed=url_required)
+        if self.fileserver.host == self.host:
+            result = self.fileserver.send_file(path, filename, indexed=url_required)
         else:
             result = send_file(filename, path, self.host)
         return result

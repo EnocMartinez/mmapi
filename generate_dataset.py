@@ -22,7 +22,7 @@ import os
 generated_datasets = {}
 
 def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, secrets, log: logging.Logger,
-                     current=False, format:str= "", verbose=False, erddap_config=False, overwrite=False) -> list:
+                     current=False, format:str= "", verbose=False, erddap_config=False, overwrite=False):
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -49,15 +49,18 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
     datasets = dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, current=current,
                                    datasets=generated_datasets, overwrite=overwrite)
 
+    for dataset in datasets:
+        print(f"====> dataset {dataset.dataset_id} url {dataset.url}")
+
     if len(datasets) == 0:
         log.warning(RED + "No datasets generated!" + RST)
         return []
-
-    log.info(f"Generated {len(datasets)} data files")
-    for dataset in datasets:
-        if dataset:  # If None dataset already existed
-            dataset.deliver(fileserver=dc.fileserver)
-
+    #
+    # log.info(f"Generated {len(datasets)} data files")
+    # for dataset in datasets:
+    #     if dataset:  # If None dataset already existed
+    #         dataset.deliver(fileserver=dc.fileserver)
+    #
     dataset = datasets[-1]
     generated_datasets[service_name] = datasets
 
@@ -69,13 +72,6 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
             erddap_uid=secrets["erddap"]["uid"]
         )
 
-    # elif service_name == "fileserver" and ckan:
-    #     ckan_url = secrets["ckan"]["url"]
-    #     ckan_key = secrets["ckan"]["api_key"]
-    #
-    #     ckan = CkanClient(dc.mc, ckan_url, ckan_key)
-    #     for dataset in datasets:
-    #         dc.upload_datafile_to_ckan(ckan, dataset)
 
 def list_datasets(secrets, verbose=False):
     with open(secrets) as f:

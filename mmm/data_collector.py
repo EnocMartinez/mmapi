@@ -10,6 +10,8 @@ created: 30/11/22
 """
 import logging
 import json
+from csv import excel_tab
+
 import emso_metadata_harmonizer.metadata
 import numpy as np
 import pandas as pd
@@ -23,8 +25,8 @@ from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
 import os
 import emso_metadata_harmonizer as mh
-from mmm import DatasetObject
-from mmm.schemas import dataset_exporter_formats
+from mmm.dataset import DatasetObject
+from mmm.schemas import dataset_exporter_formats, valid_dataset_services
 
 
 def init_data_collector(secrets: dict, log: logging.Logger, mc: MetadataCollector = None,
@@ -227,19 +229,22 @@ class DataCollector(LoggerSuperclass):
         assert_types(dataset, [dict, str])
         assert_types(time_start, [pd.Timestamp, str, type(None)])
         assert_types(time_end, [pd.Timestamp, str, type(None)])
+        assert service_name in valid_dataset_services, f"Service '{service_name}' not recognized!"
 
         if type(dataset) is str:
             conf = self.mc.get_document("datasets", dataset)
         else:
             conf = dataset
         dataset_id = conf["#id"]
-        self.info(f"Creating dataset {dataset_id} from {time_start} to {time_end}")
+        self.info(f"=====> Creating dataset {dataset_id} from {time_start} to {time_end} <=====")
+
+        assert service_name in conf["export"].keys(), f"Dataset {dataset_id} doesn't have export configuration for service '{service_name}'"
 
         if service_name == "ckan":
             # CKAN only points to the FileServer, no need to create it here
             if not self.ckan:
                 self.error("CKAN not initialized!", exception=ValueError)
-            return self.ckan.process_mmapi_dataset(conf, datasets=datasets, format=fmt)
+            return self.ckan.process_mmapi_dataset(conf, datasets=datasets, fmt=fmt)
 
         # Force the start and end in the current period, e.g. if "monthly" and now is 2024-12-12 the period
         # will be from 2024-12-01T00:00:00Z to 2025-01-01T00:00:00Z
@@ -260,6 +265,8 @@ class DataCollector(LoggerSuperclass):
                 self.warning("Time range not defined! Look for first and last measures")
                 time_start, time_end = self.get_dataset_time_coverage(conf)
                 self.info(f"Getting data from {time_start} to {time_end}")
+            except Exception as e:
+                raise e
 
         if type(time_start) is str:
             time_start = pd.Timestamp(time_start)
@@ -282,6 +289,11 @@ class DataCollector(LoggerSuperclass):
             else:
                 ds = self.generate_dataset_tree(conf, service_name, resource, time_start=time_start, time_end=time_end, fmt=fmt, overwrite=overwrite)
                 datasets += ds
+
+        self.info("Delivering dataset objects...")
+        for dataset in datasets:
+            dataset.deliver(overwrite=overwrite)
+
         return datasets
 
     def generate_dataset_tree(self,  dataset: dict, service_name: str, resource: dict, time_start: pd.Timestamp = None,
@@ -322,11 +334,9 @@ class DataCollector(LoggerSuperclass):
 
         datasets = []
         for tstart, tend in intervals:
-            try:
-                d = self.generate_dataset_file(conf, service_name, resource, tstart, tend, fmt=fmt, overwrite=overwrite)
-                datasets.append(d)
-            except LookupError:
-                continue
+            d = self.generate_dataset_file(conf, service_name, resource, tstart, tend, fmt=fmt, overwrite=overwrite)
+            datasets.append(d)
+
         return datasets
 
     def generate_dataset_file(self, dataset: dict, service_name: str, resource: dict, time_start: pd.Timestamp,
@@ -372,6 +382,18 @@ class DataCollector(LoggerSuperclass):
             fmt = resource["format"]
         else:
             assert fmt in dataset_exporter_formats, f"Format '{fmt}' not allowed"
+
+        # Check if the data already exists
+        dataset_resource_id = DatasetObject.generate_resource_id(conf['#id'], fmt, time_start, time_end)
+        if not overwrite and self.mc.dataset_resource_exists(dataset_resource_id):
+            if overwrite:
+                # Just throw a warning and continue
+                self.warning(f"Dataset resource already exists: '{dataset_resource_id}', overwriting it!")
+            else:
+                self.error(f"Data resource already exists '{dataset_resource_id}', use the --overwrite flag to overwrite it", exception=ValueError)
+        else:
+            self.info(f"Creating new dataset resource: {dataset_resource_id}")
+
         if fmt == "csv":
             filename = self.csv_from_sta(conf, time_start, time_end)
         elif fmt == "netcdf":
@@ -385,7 +407,7 @@ class DataCollector(LoggerSuperclass):
             self.warning("No dataset created! Maybe it already exists?")
             return None
 
-        obj = DatasetObject(conf, filename, service_name, resource, time_start, time_end, fmt, self.log)
+        obj = DatasetObject(self.mc, self.fileserver, conf, filename, service_name, resource, time_start, time_end, fmt, self.log)
         return obj
 
     def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
@@ -393,7 +415,9 @@ class DataCollector(LoggerSuperclass):
         if conf["dataType"] == "timeseries":
             return self.dataframe_from_sta_timeseries(conf, station, sensor, time_start, time_end)
         elif conf["dataType"] == "detections":
-            return self.dataframe_from_sta_detections(conf, station, sensor, time_start, time_end)
+            df = self.dataframe_from_sta_detections(conf, station, sensor, time_start, time_end)
+            rich.print(f"[magenta]===> dataframe_from_sta detections {df} !!!!!!!!!!!!!!!!!!!!!!!")
+            return df
         elif conf["dataType"] == "profiles":
             return self.dataframe_from_sta_profiles(conf, station, sensor, time_start, time_end)
         elif conf["dataType"] == "files":
@@ -419,13 +443,13 @@ class DataCollector(LoggerSuperclass):
         """
         Return all the detections from a sensor
         """
+
         sensor_name = sensor["#id"]
         station_name = station["#id"]
-
+        rich.print(f"[cyan]===> dataframe_from_sta_detections station {station_name} sensor {sensor_name}")
 
         time_periods = []
-
-        if "fieldOfView" in conf["constraints"]:
+        if "constraints" in conf.keys() and "fieldOfView" in conf["constraints"]:
             # Process fieldOfView constraint
             deployments = self.mc.get_sensor_deployments(sensor)
             # Keep only periods where the camera was looking to the chosen fieldOfView
@@ -442,12 +466,13 @@ class DataCollector(LoggerSuperclass):
                 else:
                     # No deployment with the fieldOfView of interest!
                     pass
-
         else:
             time_periods = [(time_start, time_end)]
+
+
         self.info(f"Sensor {sensor_name} time periods {time_periods}")
         dataframes = []
-
+        rich.print(time_periods)
         for time_start, time_end in time_periods:
             model_name = ""
             self.info(f"Getting detections with sensor={sensor_name} thing={station_name} from {time_start} to {time_end}")
@@ -455,7 +480,7 @@ class DataCollector(LoggerSuperclass):
                 model_name = conf["constraints"]["@processes"]
                 self.info(f"Using data from AI process {model_name}")
             except KeyError:
-               self.error("AI process not defined in 'detections' dataset!", exception=True)
+               self.error("AI process not defined in 'detections' dataset!", exception=ValueError)
 
             self.debug(f"getting datastream_id where dataType=json and sensor={sensor_name} and station={station_name}")
             # First get all the times where we have inferences. Let's assume that we only have one datastream that
@@ -1109,28 +1134,6 @@ class DataCollector(LoggerSuperclass):
         }
         return d
 
-    def upload_datafile_to_ckan(self, ckan, dataset: DatasetObject):
-        """
-        Takes a dataset in the FileServer and publish it to CKAN as a resource
-        """
-        self.info(f"Uploading file to ckan {dataset.url}")
-        assert type(ckan) is CkanClient
-        assert type(dataset) is DatasetObject
-
-        # The ID of the resource will be the filename in lower case with _<format>
-        resource_id = os.path.basename(dataset.filename).replace(".", "_").lower()
-        package_id = dataset.dataset_id.lower()
-
-        name = f"{dataset.dataset_id} data from {dataset.tstart_str('%Y-%m-%d')} to {dataset.tend_str('%Y-%m-%d')}"
-        description = f"Data in {dataset.fmt} format from {dataset.tstart_str()} to {dataset.tend_str()}"
-        self.info(f"registering dataset url: {dataset.url}")
-        return ckan.resource_create(
-            package_id,
-            resource_id,
-            description=description,
-            name=name,
-            format=dataset.fmt,
-            resource_url=dataset.url)
 
     def call_dataset_generator(self, dataframes: list, metadata: list, output="output.nc"):
         """

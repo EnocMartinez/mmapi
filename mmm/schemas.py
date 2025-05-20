@@ -321,13 +321,12 @@ dataset_exporter_formats = [
 ckan_resource = {
     "type": "object",
     "properties": {
-        "resource_id": {"type": "string", "definition": "ID to be assigned to the resource"},
-        "name": {"type": "string", "definition": "Visible name of the resource"},
+        "title": {"type": "string", "definition": "Visible name of the resource"},
         "description": {"type": "string", "definition": "description name of the resource"},
         "link": {"type": "string",
                 "definition": "URL of the resource, if set to $fileserver the last resource uploaded to fileserver will be used"},
     },
-    "required": ["resource_id", "name", "description", "link"]
+    "required": ["title", "description", "link"]
 }
 
 
@@ -394,8 +393,8 @@ ckan_exporter_conf = {
     "required": ["resources"]
 }
 
-
-
+# Dataset services supported by MMAPI
+valid_dataset_services = ["fileserver", "erddap", "ckan"]
 
 __datasets = {
     "$id": "mmm:datasets",
