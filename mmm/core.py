@@ -10,7 +10,7 @@ created: 27/10/23
 """
 import logging
 import pandas as pd
-from mmm import MetadataCollector, CkanClient, SensorThingsApiDB, DataCollector
+from mmm import MetadataCollector, CkanClient, SensorThingsApiDB, DataCollector, init_metadata_collector
 import rich
 from mmm.common import load_fields_from_dict, YEL, RST
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
@@ -19,6 +19,7 @@ from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInter
 from mmm.metadata_collector import get_station_coordinates, get_station_history, get_sensor_deployments
 from mmm.processes import average_process, inference_process
 from mmm.schemas import mmapi_data_types
+import numpy as np
 
 
 def get_properties(doc: dict, properties: list) -> dict:
@@ -90,7 +91,6 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
     # CKAN Projects
     if "projects" in collections:
         ckan_groups = ckan.get_group_list()
-        rich.print(ckan_groups)
 
         for doc in mc.get_documents("projects"):
             if doc["type"] == "contract":
@@ -184,11 +184,6 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
                     name = mc.get_organization(contact["@organizations"])["fullName"]
                     if role == "RightsHolder":  # assign the owner organization
                         owner = contact["@organizations"].lower()
-
-                if role not in extras.keys():
-                    extras[role] = name
-                else:
-                    extras[role] += ", " + name
 
             if not owner:
                 mc.warning(f"Owner not detected for dataset {dataset_id}, using platform owner")
@@ -420,8 +415,8 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                     exit(-1)
 
 
-def bulk_load_data(filename: str, psql_conf: dict, sensor_name: str, data_type, foi_name: str, average="",
-                   usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data", missing_data:str ="") -> bool:
+def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, foi_name: str, average="",
+                   usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data", missing_data:str ="", station_name="") -> bool:
     """
     This function performs a bulk load of the data contained in the input file
 
@@ -433,6 +428,8 @@ def bulk_load_data(filename: str, psql_conf: dict, sensor_name: str, data_type, 
     rich.print(f"    dataType={data_type}")
     rich.print(f"    average={average}")
     assert data_type in mmapi_data_types, f"data_type={data_type} not valid!"
+
+    psql_conf = secrets["sensorthings"]
 
     if filename.endswith(".csv"):
         df = open_csv(filename)
@@ -468,6 +465,7 @@ def bulk_load_data(filename: str, psql_conf: dict, sensor_name: str, data_type, 
         df = df.reset_index()
         df = df.set_index("timestamp")
 
+    df = df.sort_index(ascending=True)
     # Force qc in the upper case -> TEMP_qc -> TEMP_QC
     for col in df.columns:
         if col.endswith("_qc"):
@@ -475,6 +473,25 @@ def bulk_load_data(filename: str, psql_conf: dict, sensor_name: str, data_type, 
 
     db = SensorThingsApiDB(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger(), timescaledb=True)
+    mc = init_metadata_collector(secrets, log=db.logger)
+    tstart = df.index.min()
+    tend = df.index.max()
+    if tstart.tz is None:
+        tstart = tstart.tz_localize("utc")
+    if tend.tz is None:
+        tend = tend.tz_localize("utc")
+    rich.print("Timestamps ", tstart, tend)
+
+    if not station_name:
+        deployments = mc.get_sensor_deployments(sensor_name, interval=(tstart, tend))
+        stations = [d["station"] for d in deployments]
+        if len(np.unique(stations)) > 1:
+            raise ValueError("Multiple stations in the deployments for the selected period!")
+        station_name = deployments[0]["station"]
+
+    elif station_name not in mc.get_identifiers("stations"):
+        raise ValueError(f"Station name '{station_name}' not vlaid!")
+
 
     if missing_data:
         df = db.get_missing_data(df, sensor_name, bool(average), data_type, missing_data)
@@ -485,7 +502,7 @@ def bulk_load_data(filename: str, psql_conf: dict, sensor_name: str, data_type, 
 
     if data_type == "timeseries":
         if not average:  # timeseries with full data
-            datastreams_conf = db.get_datastream_config(sensor=sensor_name, data_type=data_type, full_data=True)
+            datastreams_conf = db.get_datastream_config(sensor=sensor_name, station=station_name,  data_type=data_type, full_data=True)
             datastreams = {
                 row["variable_name"]: row["datastream_id"] for _, row in datastreams_conf.iterrows()
             }

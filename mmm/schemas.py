@@ -57,7 +57,7 @@ __data_types__ = {
 
 __dataset_data_types__ = {
     "type": "string",
-    "enum": mmapi_data_types + ["mixed"]  # for datasets allow the use of multi-type datasets
+    "enum": mmapi_data_types + ["mixed"]
 }
 
 
@@ -272,7 +272,8 @@ __processes = {
     "type": "object",
     "properties": {
         "type": {"type": "string", "enum": ["average", "json"]},
-        "description": {"type": "string"}
+        "description": {"type": "string"},
+        "reference": {"type": "string", "definition": "Public link with process of the "}
     },
     "required": ["type", "description"]
 }
@@ -311,7 +312,8 @@ dataset_exporter_periods = [
 dataset_exporter_formats = [
     "netcdf",
     "csv",
-    "zip"
+    "zip",
+    "dwca"
 ]
 
 # DataExporter Configuration
@@ -321,40 +323,44 @@ dataset_exporter_formats = [
 ckan_resource = {
     "type": "object",
     "properties": {
+        "id": {"type": "string", "definition": "ID to be assigned to the resource"},
         "title": {"type": "string", "definition": "Visible name of the resource"},
         "description": {"type": "string", "definition": "description name of the resource"},
         "link": {"type": "string",
                 "definition": "URL of the resource, if set to $fileserver the last resource uploaded to fileserver will be used"},
     },
-    "required": ["title", "description", "link"]
+    "required": ["id", "title", "description", "link"]
 }
-
 
 
 fileserver_resource = {
     "type": "object",
     "properties": {
-        "resource_id": {"type": "string", "definition": "ID to be assigned to the resource"},
+        "id": {"type": "string", "definition": "ID to be assigned to the resource"},
         "path": {"type": "string", "definition": "path in the server filesystem"},
         "format": {"type": "string", "definition": "format of the resource", "enum": dataset_exporter_formats},
-        "period": {"type": "string", "definition": "periodiciy of the resource (daily, monthly yearly or none).",
+        "period": {"type": "string", "definition": "periodicity of the resource (daily, monthly yearly or none).",
                    "enum": dataset_exporter_periods},
         "host": {"type": "string", "definition": "hostname of the fileserver"},
+        "dataType": __dataset_data_types__,
+        "averagePeriod": {"type": "string", "definition": "For averaged timeseries/profiles, select the average period, e.g. 30min"},
     },
-    "required": ["resource_id", "path", "format", "period", "host"]
+    "required": ["id", "path", "format", "period", "host", "dataType"]
 }
 
 
 erddap_resource = {
     "type": "object",
     "properties": {
-        "path": {"type": "string", "description": "path where the datasets will be exported"},
-        "host": {"type": "string", "description": "host where to deliver the file"},
+        "id": {"type": "string", "description": "ERDDAP datasetID, if not set generic datsaet id will be used", "$comment": "$width=15"},
+        "path": {"type": "string", "description": "path where the datasets will be exported", "$comment": "$width=15"},
+        "host": {"type": "string", "description": "host where to deliver the file", "$comment": "$width=15"},
         "period": {"type": "string", "enum": dataset_exporter_periods},
         "format": {"type": "string", "enum": dataset_exporter_formats},
-        "dataset_id": {"type": "string", "description": "ERDDAP datasetID, if not set generic datsaet id will be used"},
+        "dataType": __dataset_data_types__,
+        "averagePeriod": {"type": "string", "definition": "For averaged timeseries/profiles, select the average period, e.g. 30min"},
     },
-    "required": ["path", "host", "period", "format"]
+    "required": ["id", "path", "host", "period", "format", "dataType"]
 }
 
 fileserver_exporter_conf = {
@@ -431,8 +437,14 @@ __datasets = {
                 }
             }
         },
-        "dataType": __dataset_data_types__,  # may be redundant, but helps parsing info
-        "dataSourceOptions": {"type": "object"},
+        "dataSourceOptions": {
+            "type": "object",
+            "properties": {
+                "fullData": {"type": "boolean"},
+                "averagePeriod": {"type": "string"},
+                "mergeSensors": {"type": "boolean"},
+            }
+        },
         "dataMode": {"type": "string", "enum": ["real-time", "delayed", "mixed", "provisional"]},
         "export": {
             "type": "object",
@@ -455,7 +467,7 @@ __datasets = {
             "required": ["@projects"]
         }
     },
-    "required": ["title", "summary", "@stations", "@sensors", "dataType",  "contacts", "dataSourceOptions", "export"]
+    "required": ["title", "summary", "@stations", "@sensors",  "contacts", "dataSourceOptions", "export"]
 }
 
 __activities = {
@@ -463,7 +475,7 @@ __activities = {
     "type": "object",
     "properties": {
         "description": {"type": "string"},
-        "time": {"type": "string"},
+        "time": {"type": "string", "$comment": "$style=DateTime"},
         "type": {
             "type": "string",
             "enum": __activity_type__
@@ -505,7 +517,12 @@ __operations = {
             "enum": __operation_type__
         },
         "participants": __people_with_roles__(__operation_roles__),
-        "@activities": __string_list__,
+        "@activities": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"},
+            "$comment": "$style=ActivitySelector"  # Force ActivitySelector class
+        },
         "@projects": __string_list__,
         "@resources": __string_list__,
         "comment": {"type": "string"}
@@ -602,7 +619,7 @@ __projects = {
                         "type": "object",
                         "properties": {
                             "@organizations": {"type": "string"},
-                            "acronym": {"type": "string"},
+                            "acronym": {"type": "string", "$comment": "$width=20"},
                             "fullName": {"type": "string"},
                             "budget": {"type": "number"},
                             "partnershipType": {"type": "string", "enum": __partnership_types__}

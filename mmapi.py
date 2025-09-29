@@ -98,6 +98,23 @@ def post_to_collection(collection: str):
 
     return Response(json.dumps(inserted_document), status=200, mimetype="application/json")
 
+@app.route('/mmapi/v1.0/validate/<path:collection>', methods=['POST', 'PATCH'])
+def post_to_validate(collection: str):
+    document = json.loads(request.data)
+    app.log.debug(f"Checking if collection {collection} exists...")
+    if collection not in app.mc.collection_names:
+        return api_error(f"Collection not '{collection}', valid collection names {app.mc.collection_names}")
+
+    if "#id" not in document.keys():
+        return api_error(f"Field #id not found in document")
+
+    try:
+        app.mc.validate_document(document, collection, exception=True, metadata=False)
+    except Exception as e:
+        return Response({"success": False}, status=200, mimetype="application/json")
+
+    return Response({"success": True}, status=200, mimetype="application/json")
+
 
 @app.route('/mmapi/v1.0/<path:collection>/<path:document_id>', methods=['PUT'])
 def put_to_collection(collection: str, document_id: str):

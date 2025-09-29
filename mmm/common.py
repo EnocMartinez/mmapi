@@ -355,25 +355,6 @@ def download_file(url: str, output: str):
         raise ValueError(f"Could not donwload file {url}, http_code = {response.status_code}")
 
 
-def detect_common_path(paths):
-    """
-    Returns the common prefix in a list of strings
-    """
-    path_splits = [p.split("/") for p in paths]  # list of lists of paths
-    i = -1
-    loop = True
-    while loop:
-        i += 1
-        compare = path_splits[0][i]
-        for p in path_splits[1:]:
-            if len(p) <= i or compare != p[i]:
-                loop = False
-                break
-
-    common_path = "/".join(path_splits[0][:i]) + "/"
-    return common_path
-
-
 def rsync_files(host: str, folder, files: list):
     """
     Uses rsync to copy some files to a remote folder

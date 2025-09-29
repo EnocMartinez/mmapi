@@ -77,6 +77,7 @@ def plot_trajectory(df, dataset_id):
 
 
 def plot_timeseries(df):
+    df = df.dropna(axis=1, how='all')  # drop columns with ALL nans
     varlist = [c for c in df.columns if not c.endswith("_QC") and not c.endswith("_U") and not c.endswith("_STD")]
     varlist = [c for c in varlist if c not in ["LATITUDE", "LONGITUDE", "DEPTH", "SENSOR_ID", "TIME"]]
 

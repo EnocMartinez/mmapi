@@ -8,6 +8,7 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 30/11/22
 """
+import datetime
 import logging
 import json
 from csv import excel_tab
@@ -16,9 +17,11 @@ import emso_metadata_harmonizer.metadata
 import numpy as np
 import pandas as pd
 import rich
+
+from .darwin_core import DarwinCoreArchive
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
-from .common import run_subprocess, check_url, detect_common_path, run_over_ssh, LoggerSuperclass, assert_types, \
+from .common import run_subprocess, check_url, run_over_ssh, LoggerSuperclass, assert_types, \
     assert_type
 from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals
 from .metadata_collector import MetadataCollector, init_metadata_collector
@@ -100,7 +103,8 @@ class DataCollector(LoggerSuperclass):
         extensions = {
             "netcdf": ".nc",
             "csv": ".csv",
-            "zip": ".zip"
+            "zip": ".zip",
+            "dwca": ".zip"
         }
 
         dataset_id = dataset["#id"]
@@ -214,8 +218,8 @@ class DataCollector(LoggerSuperclass):
         return pd.Timestamp(time_start), pd.Timestamp(time_end)
 
     def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str = None,
-                         time_end: pd.Timestamp|str = None, fmt: str = "", current=False,  datasets={}, overwrite=False
-                         ) -> list:
+                         time_end: pd.Timestamp|str = None, fmt: str = "", current=False, overwrite=False,
+                         erddap_config=False, secrets={}, resources=[], deliver=True):
         """
 
         :param dataset: dataset identifier (as stored in metadata database
@@ -244,7 +248,7 @@ class DataCollector(LoggerSuperclass):
             # CKAN only points to the FileServer, no need to create it here
             if not self.ckan:
                 self.error("CKAN not initialized!", exception=ValueError)
-            return self.ckan.process_mmapi_dataset(conf, datasets=datasets, fmt=fmt)
+            return self.ckan.process_mmapi_dataset(conf, resources=resources)
 
         # Force the start and end in the current period, e.g. if "monthly" and now is 2024-12-12 the period
         # will be from 2024-12-01T00:00:00Z to 2025-01-01T00:00:00Z
@@ -281,19 +285,42 @@ class DataCollector(LoggerSuperclass):
         if time_start and time_end and time_start > time_end:
             raise ValueError(f"Time start={time_start} greater than time end={time_end}")
         datasets = []
+
         self.info(f"Creating resource for service {service_name} and dataset {dataset_id}")
         for resource in conf["export"][service_name]["resources"]:
+            resrouce_id = resource["id"]
+            if resources and  resrouce_id not in resources:
+                self.warning(f"Ignoring resource {resrouce_id}")
+                continue
+            else:
+                self.info(f"Keeping resource {resrouce_id}")
+
             if resource["period"] == "none":
                 d = self.generate_dataset_file(conf, service_name, resource, time_start, time_end, fmt=fmt, overwrite=overwrite)
-                datasets.append(d)
+                if d:
+                    datasets.append(d)
             else:
                 ds = self.generate_dataset_tree(conf, service_name, resource, time_start=time_start, time_end=time_end, fmt=fmt, overwrite=overwrite)
                 datasets += ds
 
-        self.info("Delivering dataset objects...")
-        for dataset in datasets:
-            dataset.deliver(overwrite=overwrite)
+        if deliver:
+            self.info("Delivering dataset objects...")
+            for dataset in datasets:
+                if dataset:
+                    dataset.deliver(overwrite=overwrite)
+        else:
+            for dataset in datasets:
+                self.info(f"Local file stored in {dataset.filename}")
 
+        if service_name == "erddap" and erddap_config:
+            self.info("Trying to autoconfigure ERDDAP dataset (using last dataset)")
+            dataset.configure_erddap_remotely(
+                secrets["erddap"]["datasets_xml"],
+                big_parent_directory=secrets["erddap"]["big_parent_directory"],
+                erddap_uid=secrets["erddap"]["uid"]
+            )
+        # Avoid None datasets
+        datasets = [d for d in datasets if d]
         return datasets
 
     def generate_dataset_tree(self,  dataset: dict, service_name: str, resource: dict, time_start: pd.Timestamp = None,
@@ -377,29 +404,33 @@ class DataCollector(LoggerSuperclass):
                 self.warning(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
         # Generate the dataset filename
 
-
         if not fmt:
             fmt = resource["format"]
         else:
             assert fmt in dataset_exporter_formats, f"Format '{fmt}' not allowed"
 
         # Check if the data already exists
-        dataset_resource_id = DatasetObject.generate_resource_id(conf['#id'], fmt, time_start, time_end)
+
+        dataset_resource_id = resource["id"]
+
         if not overwrite and self.mc.dataset_resource_exists(dataset_resource_id):
             if overwrite:
                 # Just throw a warning and continue
                 self.warning(f"Dataset resource already exists: '{dataset_resource_id}', overwriting it!")
             else:
-                self.error(f"Data resource already exists '{dataset_resource_id}', use the --overwrite flag to overwrite it", exception=ValueError)
+                self.error(f"Data resource already exists '{dataset_resource_id}', use the --overwrite flag to overwrite it")
+                return
         else:
             self.info(f"Creating new dataset resource: {dataset_resource_id}")
 
         if fmt == "csv":
-            filename = self.csv_from_sta(conf, time_start, time_end)
+            filename, delivered = self.csv_from_sta(conf, resource, time_start, time_end)
         elif fmt == "netcdf":
-            filename = self.netcdf_from_sta(conf, time_start, time_end)
+            filename, delivered = self.netcdf_from_sta(conf, resource, time_start, time_end)
         elif fmt == "zip":
-            filename = self.zip_from_filesystem(conf, resource, time_start, time_end, overwrite=overwrite)
+            filename, delivered = self.zip_from_filesystem(conf, resource, time_start, time_end, overwrite=overwrite)
+        elif fmt == "dwca":
+            filename, delivered = self.darwin_core_from_sta(conf, resource, time_start, time_end, overwrite=overwrite)
         else:
             raise ValueError(f"Unknown dataSource format '{fmt}'")
 
@@ -407,47 +438,37 @@ class DataCollector(LoggerSuperclass):
             self.warning("No dataset created! Maybe it already exists?")
             return None
 
-        obj = DatasetObject(self.mc, self.fileserver, conf, filename, service_name, resource, time_start, time_end, fmt, self.log)
+        obj = DatasetObject(self.mc, self.fileserver, conf, filename, service_name, resource, time_start, time_end, fmt, self.log, delivered=delivered)
         return obj
 
-    def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
+    def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, resource: dict, time_start: pd.Timestamp,
                            time_end: pd.Timestamp) -> pd.DataFrame:
-        if conf["dataType"] == "timeseries":
-            return self.dataframe_from_sta_timeseries(conf, station, sensor, time_start, time_end)
-        elif conf["dataType"] == "detections":
-            df = self.dataframe_from_sta_detections(conf, station, sensor, time_start, time_end)
-            rich.print(f"[magenta]===> dataframe_from_sta detections {df} !!!!!!!!!!!!!!!!!!!!!!!")
+        rich.print(resource)
+        data_type = resource["dataType"]
+        if data_type == "timeseries":
+            return self.dataframe_from_sta_timeseries(conf, resource, station, sensor, time_start, time_end)
+        elif data_type == "detections":
+            df = self.dataframe_from_sta_detections(conf, resource, station, sensor, time_start, time_end)
             return df
-        elif conf["dataType"] == "profiles":
+        elif data_type == "profiles":
             return self.dataframe_from_sta_profiles(conf, station, sensor, time_start, time_end)
-        elif conf["dataType"] == "files":
+        elif data_type == "files":
             return self.dataframe_from_sta_observations(conf, station, sensor, time_start, time_end)
-        elif conf["dataType"] == "mixed":
-
-            conf_copy = conf.copy()
-            conf_copy["dataType"] = "files"  # force dataType to files
-
-            files =  self.dataframe_from_sta_observations(conf_copy, station, sensor, time_start, time_end)
-
-            conf_copy = conf.copy()
-            conf_copy["dataType"] = "timeseries"  # force dataType to files
-            conf_copy["dataSourceOptions"]["fullData"] = True
-            timeseries = self.dataframe_from_sta_timeseries(conf_copy, station, sensor, time_start, time_end)
-            df = merge_dataframes_by_columns([timeseries, files])
-            return df
+        elif data_type == "json":
+            return self.dataframe_from_sta_json(conf, station, sensor, time_start, time_end)
         else:
+            df = None
             self.error(f"Unimplemented data type {conf['dataType']}", exception=ValueError)
+        return df
 
-    def dataframe_from_sta_detections(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
+    def dataframe_from_sta_detections(self, conf: dict, resource: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
                                       time_end: pd.Timestamp):
         """
         Return all the detections from a sensor
         """
-
         sensor_name = sensor["#id"]
         station_name = station["#id"]
-        rich.print(f"[cyan]===> dataframe_from_sta_detections station {station_name} sensor {sensor_name}")
-
+        self.info(f"dataframe_from_sta_detections station {station_name} sensor {sensor_name}")
         time_periods = []
         if "constraints" in conf.keys() and "fieldOfView" in conf["constraints"]:
             # Process fieldOfView constraint
@@ -469,10 +490,8 @@ class DataCollector(LoggerSuperclass):
         else:
             time_periods = [(time_start, time_end)]
 
-
         self.info(f"Sensor {sensor_name} time periods {time_periods}")
         dataframes = []
-        rich.print(time_periods)
         for time_start, time_end in time_periods:
             model_name = ""
             self.info(f"Getting detections with sensor={sensor_name} thing={station_name} from {time_start} to {time_end}")
@@ -541,13 +560,13 @@ class DataCollector(LoggerSuperclass):
         df = pd.concat(dataframes).sort_index()
         return df
 
-    def dataframe_from_sta_timeseries(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
+    def dataframe_from_sta_timeseries(self, conf: dict, resource: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
                                       time_end: pd.Timestamp = None):
         """
         Returns a DataFrame for a specific Sensor in a specific time interval
         """
 
-        data_type = conf["dataType"]
+        data_type = resource["dataType"]
         sensor_name = sensor["#id"]
         station_name = station["#id"]
 
@@ -555,10 +574,12 @@ class DataCollector(LoggerSuperclass):
         if "@variables" in conf.keys():
             variables = conf["@variables"]
 
-        try:
-            full_data = conf["dataSourceOptions"]["fullData"]
-        except KeyError:
-            self.error("[red]dataSourceOptions/fullData not found in dataset configuration!", exception=KeyError)
+        if "averagePeriod" not in resource.keys():
+            full_data = True
+        else:
+            full_data = False
+            avg_period = resource["averagePeriod"]
+
 
         # Get the THING_ID from SensorThings based on the Station name
         thing_id = self.sta.value_from_query(
@@ -586,7 +607,6 @@ class DataCollector(LoggerSuperclass):
 
         if not full_data:
             # if we are dealing with an average, we need to make sure that the average period matches
-            avg_period = conf["dataSourceOptions"]["averagePeriod"]
             query += f'\r\n\t\t and "DATASTREAMS"."PROPERTIES"->>\'averagePeriod\' = \'{avg_period}\''
 
         query += ";"
@@ -624,9 +644,6 @@ class DataCollector(LoggerSuperclass):
                         and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
                 ''')
             df = self.sta.dataframe_from_query(q, debug=False)
-
-
-
             sensor_dataframes.append(df)
         if not sensor_dataframes:
             return pd.DataFrame()  # return empty dataframe
@@ -727,7 +744,6 @@ class DataCollector(LoggerSuperclass):
             sensor_dataframes.append(df)
 
         df = merge_dataframes_by_columns(sensor_dataframes, timestamp=["timestamp", "depth"])
-        print(df)
         df = df.rename(columns={"timestamp": "TIME", "depth": "DEPTH"})
         df = df.set_index("TIME")
         df = df.sort_index(ascending=True)
@@ -811,8 +827,81 @@ class DataCollector(LoggerSuperclass):
         df = df.sort_index(ascending=True)
         return df
 
+    def dataframe_from_sta_json(self, conf, station:dict, sensor:dict, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
+        """
+        Return all the detections from a sensor
+        """
+        sensor_name = sensor["#id"]
+        station_name = station["#id"]
+        self.info(f"dataframe_from_sta_json station {station_name} sensor {sensor_name}")
+        time_periods = []
+        if "constraints" in conf.keys() and "fieldOfView" in conf["constraints"]:
+            # Process fieldOfView constraint
+            deployments = self.mc.get_sensor_deployments(sensor)
+            # Keep only periods where the camera was looking to the chosen fieldOfView
+            for deployment in deployments:
+                if "fieldOfView" not in deployment.keys():
+                    self.error(f"Deployment has no fieldOfView! sensor={sensor_name} activity_id={deployment['id']}",
+                               exception=ValueError)
+                if conf["constraints"]["fieldOfView"]["@programmes"] == deployment["fieldOfView"]["@programmes"]:
+                    if deployment["end"]:
+                        end = deployment["end"]
+                    else:
+                        end = time_end
+                    time_periods.append((deployment["start"], end))
+                else:
+                    # No deployment with the fieldOfView of interest!
+                    pass
+        else:
+            time_periods = [(time_start, time_end)]
 
-    def netcdf_from_sta(self, conf, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
+        self.info(f"Sensor {sensor_name} time periods {time_periods}")
+        dataframes = []
+        for time_start, time_end in time_periods:
+            model_name = ""
+            self.info(f"Getting JSON with sensor={sensor_name} thing={station_name} from {time_start} to {time_end}")
+            try:
+                model_name = conf["constraints"]["@processes"]
+                self.info(f"Using data from AI process {model_name}")
+            except KeyError:
+               self.error("AI process not defined in 'detections' dataset!", exception=ValueError)
+
+            self.debug(f"getting datastream_id where dataType=json and sensor={sensor_name} and station={station_name}")
+            # First get all the times where we have inferences. Let's assume that we only have one datastream that
+            # matches data_type=json and model_name=<AI model>
+            q = f""" select \"ID\" from \"DATASTREAMS\" 
+                where 
+                    \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
+                    and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
+                    and \"PROPERTIES\"->>'dataType' = 'json'
+                    and \"PROPERTIES\"->>'modelName' = '{model_name}'
+                ;"""
+            try:
+                inference_datastream = self.sta.value_from_query(q)
+            except LookupError:
+                return pd.DataFrame()  # return empty dataframe
+
+            self.debug(f"Pictures datastream_id = {inference_datastream}")
+            df = self.sta.dataframe_from_query(f'''
+                select
+                    "PHENOMENON_TIME_START" as timestamp,
+                    "PARAMETERS"->>'sourceImage' as "sourceImage",
+                    "RESULT_JSON" as json,
+                    "FEATURES"."NAME" as foi
+                                        
+                from "OBSERVATIONS", "FEATURES"
+                where 
+                    "OBSERVATIONS"."FEATURE_ID" = "FEATURES"."ID" and
+                    "DATASTREAM_ID" = {inference_datastream} and
+                    "PHENOMENON_TIME_START" between '{time_start}' and '{time_end}'
+                ;
+                ''')
+            dataframes.append(df)
+        df = pd.concat(dataframes)
+        return df
+
+
+    def netcdf_from_sta(self, conf: dict, resource: dict, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
         """
         Creates a NetCDF file according to the configuration
         :param conf:
@@ -832,7 +921,7 @@ class DataCollector(LoggerSuperclass):
         for sensor_name in conf["@sensors"]:
             self.info(f"Getting {sensor_name} data from {time_start} to {time_end}")
             sensor = self.mc.get_document("sensors", sensor_name)
-            df = self.dataframe_from_sta(conf, station, sensor, time_start=time_start, time_end=time_end)
+            df = self.dataframe_from_sta(conf, station, sensor, resource, time_start=time_start, time_end=time_end)
             if df.empty:
                 self.debug(f"no data for {sensor['#id']}  from {time_start} to {time_end}")
                 tstart = None
@@ -841,33 +930,71 @@ class DataCollector(LoggerSuperclass):
                 # now select real values of time start and time end
                 tstart = pd.Timestamp(df.index.values[0])
                 tend = pd.Timestamp(df.index.values[-1])
-            dataframes.append(df)
-            # Get the real time start/time end
-            m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=tstart, tend=tend)
-            metadata.append(m)
+                dataframes.append(df)
+                # Get the real-time start/time end
+                m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=tstart, tend=tend)
+                metadata.append(m)
 
         if all([df.empty for df in dataframes]):
             self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
-            raise LookupError("no data")
+            return "", False
 
         self.info("Generating filename...")
         filename = self.dataset_filename(conf, "netcdf", time_start, time_end)
         self.info("Calling NetCDF wrapper...")
-        filename = self.call_dataset_generator(dataframes, metadata, output=filename)
+        filename = self.call_dataset_generator(conf, dataframes, metadata, output=filename)
         self.info(f"Dataset {filename} generated!")
-        return filename
+        return filename, False
 
-    def csv_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp):
+    def darwin_core_from_sta(self, conf, resource, time_start: pd.Timestamp, time_end: pd.Timestamp, overwrite=False):
+        """
+        Creates a Darwin Core Archive from JSON data from an AI model
+        :param conf:
+        :param time_start: time start to filter the data
+        :param time_end: time start
+        :return: generated NetCDF filename
+        """
+        self.info("Creating Darwin Core Archive dataset")
+        assert resource["dataType"] == "json", f"Darwin Core only works with JSON data, got '{conf['dataType']}'"
+        assert_type(conf, dict)
+        assert_type(resource, dict)
+        assert_type(time_start,  pd.Timestamp)
+        assert_type(time_end,  pd.Timestamp)
+
+        station = self.mc.get_document("stations", conf["@stations"])
+        station_name = station["#id"]
+        variables = []  # by default all variables will be used
+        if "@variables" in conf.keys():
+            variables = conf["@variables"]
+
+        dataframes = []  # list with a dataframe per variable
+        metadata = []    # list of a metadata dict per variable
+        events = []
+
+        if len(conf["@sensors"]) > 1:
+            self.error("Unimplemented DwC-A for datasets with multiple sensors!", exception=ValueError)
+
+        sensor_name = conf["@sensors"][0]
+        self.info(f"Getting {sensor_name} data from {time_start} to {time_end}")
+        sensor = self.mc.get_document("sensors", sensor_name)
+        df = self.dataframe_from_sta_json(conf, station, sensor, time_start=time_start, time_end=time_end)
+        dwca = DarwinCoreArchive(self.mc, df, sensor, station, conf, time_start, time_end, self.log)
+        filename = self.dataset_filename(conf, "dwca", time_start, time_end)
+        dwca.create_archive(filename)
+        return filename, False
+
+
+
+    def csv_from_sta(self, conf, resource, time_start: pd.Timestamp, time_end: pd.Timestamp):
         """
         Generates a CSV file from a SensorThings Database
         """
         filename = self.dataset_filename(conf, "csv", time_start, time_end)
         station = self.mc.get_document("stations", conf["@stations"])
         dataframes = []  # list with a dataframe per variable
-
         for sensor_name in conf["@sensors"]:
             sensor = self.mc.get_document("sensors", sensor_name)
-            df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
+            df = self.dataframe_from_sta(conf, station, sensor, resource, time_start, time_end)
             if df.empty:
                 self.warning(f"No data for sensor={sensor_name}  between {time_start} and {time_end}")
                 continue
@@ -895,18 +1022,24 @@ class DataCollector(LoggerSuperclass):
 
         df = df.sort_index()
         df.to_csv(filename)
-        return filename
+        return filename, False
 
-    def zip_from_filesystem(self, conf, resource, time_start, time_end, overwrite=False) -> str:
+    def zip_from_filesystem(self, conf, resource, time_start, time_end, overwrite=False) -> (str, bool):
         """
         Compresses all files in the fileserver into a zip file. Since millions of files can be compressed, a small
-        bash script will be generated and transfered to the fileserver and executed there. Then the file will be
-        transfered to the machine running MMAPI
+        bash script will be generated and transferred to the fileserver and executed there. Then the file will be
+        transferred to the machine running MMAPI
+
+        :return filename, delivered
         """
 
         # Create the dataset in /var/tmp
-        remote_filename = self.dataset_filename(conf, "zip", time_start, time_end, tmp_folder="/var/tmp")
         self.info(f"Creating ZIP dataset, ID: {conf['#id']}, from {time_start} to {time_end}")
+
+        dataset_id = conf["#id"]
+        tmp_folder = f"/var/tmp/{datetime.datetime.now().strftime('%s')}/{dataset_id}"
+        remote_filename = self.dataset_filename(conf, "zip", time_start, time_end,
+                                                tmp_folder="/var/tmp")
 
         # Check if the ZIP already exists, it may save a lot of time
         if check_url(self.fileserver.path2url(os.path.join(resource["path"], os.path.basename(remote_filename)))):
@@ -919,8 +1052,10 @@ class DataCollector(LoggerSuperclass):
         # First step, get all files indexed in the SensorThings database
         datastream_ids = []
         #for sensor in conf["@sensors"]:
-        if len(conf["@sensors"])!=1:
-            raise ValueError("ZIP dataset with multiple sensors not supported")
+        # if len(conf["@sensors"])!=1:
+        #     raise ValueError("ZIP dataset with multiple sensors not supported")
+
+        file_mapping = {}  # key=path in filesystem, value=path in zip file
 
         for sensor in conf["@sensors"]:
             sensor_id = self.sta.sensor_id_name[sensor]
@@ -943,13 +1078,36 @@ class DataCollector(LoggerSuperclass):
 
         # Now let's query for all registered files in the database matching the datastreams
         df = self.sta.dataframe_from_query(f'''
-        select "RESULT_STRING" as files from "OBSERVATIONS"             
+         select 
+            "OBSERVATIONS"."PHENOMENON_TIME_START" as time,
+            "OBSERVATIONS"."PHENOMENON_TIME_END" as time_end,
+            "SENSORS"."NAME" as sensor,
+            "OBSERVATIONS"."RESULT_STRING" as urls
+        from "OBSERVATIONS", "DATASTREAMS", "SENSORS"             
         where            
-            "DATASTREAM_ID" IN ({", ".join(datastream_ids)})
-            and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
+            "DATASTREAM_ID" IN ({', '.join(datastream_ids)}) and
+            "OBSERVATIONS"."DATASTREAM_ID" = "DATASTREAMS"."ID" and
+            "SENSORS"."ID" = "DATASTREAMS"."SENSOR_ID" and
+            "OBSERVATIONS"."PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
         ''', debug=False)
 
-        files = list(df["files"])  # List of all files to be compressed
+            # Now we will do the following:
+        # 1. Create a temporal folder in /var/temp/<epochtime>
+        # 2. Create one folder per sensor:
+        #     /var/temp/<epochtime>/<sensor1>
+        #     /var/temp/<epochtime>/<sensor2>
+        # 3. To avoid errors due to long comands over ssh, we will put all the required stuff inside a bash script
+        #    and send it to the server the script will have:
+        #    3.1 copy all files in the DataFrame to its sensor folder
+        #    3.2 create index.csv file
+        #    3.3 compress to zip
+        #    3.3 send the zip file to its destination
+        #    3.4 delete temporal files
+
+
+
+        files = list(df["urls"])  # List of all files to be compressed
+
         if len(files) < 1:
             raise ValueError(f"No files to be zipped!")
         elif len(files) == 1:
@@ -958,60 +1116,81 @@ class DataCollector(LoggerSuperclass):
 
         # Now convert the file URLs to filesystem paths
         files = [self.fileserver.url2path(f) for f in files]
+        df["src_files"] = files
+        dst_files = []
+        for _, row in df.iterrows():
+            sensor = row["sensor"]
+            dst_files.append(sensor + "/" + os.path.basename(row["src_files"]))
 
-        # Try to remove path until the sensor name
-        basepath = detect_common_path(files)
-        self.debug(f"all files start with path: '{basepath}'")
-        # Find until the sensor name and keep it in the files
-        idx = basepath.find(sensor)
-        if idx < 0:
-            self.warning(f"sensor_name='{sensor}' not in basepath='{basepath}'!")
-            basepath = os.path.dirname(basepath)  # Keep the last folder
-        else:
-            basepath = basepath[:idx]  # basepath
-        basepath = basepath[:idx]  # basepath
-        self.info(f"Base path for the dataset is {basepath}")
+        df["files"] = dst_files
 
-        # Erase basepath, so we keep the basepath
-        files = [f.replace(basepath, "") for f in files]
-
-        # Make sure that relative paths are not interpreted as absolute now
-        for i in range(len(files)):
-            if files[i].startswith("/"):
-                files[i] = files[i][1:]
-
+        dfcsv = df.copy()
+        dfcsv = dfcsv
+        del dfcsv["src_files"]
+        dfcsv.to_csv("index.csv", index=False)
         # If the command is too long it cannot be sent via ssh and will raise an OSError, we create a temporal script
         # with the command and send it to the host
         script_name = os.path.basename(remote_filename).split(".")[0] + ".sh"
         self.info(f"Creating zip script {script_name}...")
+        sensors = df["sensor"].unique()  # get list of sensors with data
+
+        # create sensor folders
+        for sensor in sensors:
+            run_over_ssh(self.fileserver.host, f"mkdir -p {tmp_folder}/{sensor}")
+        # Send index.csv file
+        self.fileserver.send_file(tmp_folder, "index.csv", indexed=False)
+
+        os.remove("index.csv")
 
         cmd = "#!/bin/bash\n"
+        cmd += "set -o errexit"
+        cmd += "set -o nounset"
         cmd += "echo 'Auto-generated script from MMAPI, compressing files into a zip file'\n"
-        cmd += f"cd {basepath}\n"
-        cmd += f"mkdir -p {os.path.dirname(remote_filename)}\n"
-        cmd += f"zip -r {remote_filename} {' '.join(files)}\n"
+        cmd += f"cd {tmp_folder}\n"
+        for _, row in df.iterrows():
+            source = row["src_files"]
+            dest = row["files"]
+            cmd += f"cp {source} {dest}\n"
+        cmd += f"zip -9 -r {remote_filename} index.csv {' '.join(sensors)}\n"
+        for sensor in sensors:
+            cmd += f"rm {sensor}/* \n"
+            cmd += f"rmdir {sensor}\n"
+        cmd += f"rm {tmp_folder}/index.csv\n"
+        cmd += f"rm {tmp_folder}/{script_name}\n"
+        cmd += f"rmdir {tmp_folder}\n"
 
+        self.info(f"Creating script {script_name}")
         with open(script_name, "w") as f:
             f.write(cmd)  # write the command to the script
         os.chmod(script_name, 0o775)
 
         self.info(f"Delivering script...")
-        script_dest = os.path.join(f"/var/tmp/{script_name}")
-        self.fileserver.send_file("/var/tmp", script_name, indexed=False)
-
+        script_dest = os.path.join(f"{tmp_folder}")
+        self.fileserver.send_file(script_dest, script_name, indexed=False)
         self.info(f"Creating zip file with {len(files)} files, this may take a while...")
-        run_over_ssh(self.fileserver.host, script_dest, fail_exit=True)
+        # Run the script!
+        run_over_ssh(self.fileserver.host, script_dest + "/" + script_name, fail_exit=True)
 
-        # Now get the file
-        self.info(f"get zip file from server...")
-        filename = self.fileserver.recv_file(remote_filename, "tmpdata")
 
-        # delete remote file
-        run_over_ssh(self.fileserver.host, f"rm {remote_filename}")
-        # delete local file
+        # At this point the file should be created
+        # if the destination and the fileserver are the same (very likely), just copy from temp folder to the definitive
+        # folder
+        if self.fileserver.host == resource["host"]:
+            dest = resource["path"]
+            src = remote_filename
+            self.info(f"Moving inside fileserver from {src} to {dest}")
+            rich.print(f"mv {src} {dest}")
+            filename = os.path.join(dest, os.path.basename(src))
+            run_over_ssh(self.fileserver.host, f"mkdir -p {os.path.dirname(filename)}")
+            run_over_ssh(self.fileserver.host, f"mv {src} {filename}")
+            delivered = True
+        else:
+            # Download to this machine
+            self.error("Not implemented!!", exception=ValueError)
+            delivered = False
+
         os.remove(script_name)
-        run_over_ssh(self.fileserver.host, f"rm {script_dest}")
-        return filename
+        return filename, delivered
 
     def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list,
                                  default_data_mode="real-time", os_data_type="OceanSITES time-series data",
@@ -1135,7 +1314,7 @@ class DataCollector(LoggerSuperclass):
         return d
 
 
-    def call_dataset_generator(self, dataframes: list, metadata: list, output="output.nc"):
+    def call_dataset_generator(self, conf: dict, dataframes: list, metadata: list, output="output.nc"):
         """
         Dump dataframes and metadata to temporal files and calls the datasets generator
         :param dataframes:
@@ -1144,8 +1323,91 @@ class DataCollector(LoggerSuperclass):
         :return:
         """
         assert (len(dataframes) == len(metadata))
+        # The metadata expander handles special cases where the variables listed do not math with the data columns,
+        # like AI-produced data for object detections.
+        metadata_expander = {
+            # Key -> variable name, value -> function that processes the metadata with conf, meta data args
+            "FATX": self.fatx_metadata_expander,
+        }
+
         if not self.emso:
             self.emso = emso_metadata_harmonizer.metadata.EmsoMetadata()
         dataframes = [df.reset_index() for df in dataframes]
+
+
+        for i, (meta, df) in enumerate(zip(metadata, dataframes)):
+            # Expand metadata according to the metadata_expander rules
+            for varname, handler in metadata_expander.items():
+                if varname in meta["variables"].keys():
+                    meta = handler(conf, meta, df)
+
+            df.to_csv(f"data_{i:02d}.csv")
+            with open(f"meta_{i:02d}.json", "w") as f:
+                json.dump(meta, f, indent=4)
+
         mh.generate_dataset(dataframes, metadata, output=output, emso_metadata=self.emso)
         return output
+
+
+    def fatx_metadata_expander(self, conf: dict, meta: dict, df: pd.DataFrame):
+        """
+        FATX is used for datasets where fish abundance has been estimated probably with an object detection algorithm.
+        It is assumed that it is an underwater_photography dataset.
+        """
+        assert_type(conf, dict)
+        assert_type(meta, dict)
+        assert_type(df, pd.DataFrame)
+        try:
+            ai_model = conf["constraints"]["@processes"]
+        except KeyError:
+            self.error("Could not find @processes reference in FATX metadata!", exception=ValueError)
+        self.info(f"FATX metadata expander with model '{ai_model}'")
+        process = self.mc.get_document("processes", ai_model)
+        variables = process["variableNames"]
+
+        # rename what needs to be renamed
+        if "rename" in process.keys():
+            for i, var in enumerate(variables):
+                if var in process["rename"].keys():
+                    variables[i] = process["rename"][var]
+
+        if "ignore" in process.keys():
+            for var in process["ignore"]:
+                if var in variables:
+                    del variables[variables.index(var)]
+
+        var_list = list(np.unique(variables))
+
+        db_variables = self.mc.get_documents("variables")
+        # create a dictionary with standard_name as key and doc as value
+        variable_dict = {doc["standard_name"]: doc for doc in db_variables if doc["standard_name"]}
+
+        meta["variables"] = {}
+        for var in var_list:
+            variable_doc = variable_dict[var]
+            meta["variables"][var] = {
+                "*long_name": f"abundance of {var} detected by AI model '{ai_model}'",
+                "*sdn_parameter_uri": variable_doc["definition"],
+                "~sdn_uom_uri": "Dimensionless",
+                "~standard_name": var,
+            }
+
+        if "SourceImage" in df.columns:
+            variable_doc = self.mc.get_document("variables", "underwater_photography")
+            meta["variables"][var] = {
+                "*long_name": f"underwater images",
+                "*sdn_parameter_uri": variable_doc["definition"],
+                "~sdn_uom_uri": "Dimensionless",
+                "~standard_name": variable_doc["standard_name"]
+            }
+
+        if "ProcessedImage" in df.columns:
+            variable_doc = self.mc.get_document("variables", "underwater_photography")
+            meta["variables"][var] = {
+                "*long_name": f"underwater images with AI detections",
+                "*sdn_parameter_uri": variable_doc["definition"],
+                "~sdn_uom_uri": "Dimensionless",
+                "~standard_name": variable_doc["standard_name"]
+            }
+
+        return meta

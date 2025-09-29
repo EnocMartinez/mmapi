@@ -130,7 +130,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             os.rmdir(d)
 
         log.info("Setting up system start docker compose... (this may take a while)")
-        run_subprocess("docker compose up -d --build", fail_exit=True)
+        #run_subprocess("docker compose up -d --build", fail_exit=True)
+        run_subprocess("docker compose up -d", fail_exit=True)
 
         # make sure that all servieces are up and running with at least a quick get
         urls = {
@@ -392,6 +393,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "name": "Simple average the measure",
             "description": "Averages sensor variables over a period of time (period parameter, e.g. 30min, 1day). If a "
                            "certain variable should not be averaged, add it to the ignore list",
+            "reference": "https://en.wikipedia.org/wiki/Average",
             "parameters": {
                 "period": "period to average (string)",
                 "ignore": "list of variables to ignore when averaging"
@@ -637,7 +639,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         d = {
             "#id": "sbe37depl",
             "name": "SBE37 deployment",
-            "time": "2023-01-01T00:00:00Z",
+            "time": "2020-01-01T00:00:00Z",
             "type": "deployment",
             "appliedTo": {
                 "@sensors": "SBE37"
@@ -701,7 +703,44 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 }
             }
         }
+        d2 = {
+            "#id": "OBSEA_Biotop",
+            "description": "Biotope in front of OBSEA",
+            "@projects": [],
+            "geoJsonFeature": {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                    "coordinates": [
+                        [
+                            [
+                                1.7515221855838945,
+                                41.183341295396275
+                            ],
+                            [
+                                1.7515221855838945,
+                                41.181307814018794
+                            ],
+                            [
+                                1.7538603482693702,
+                                41.181307814018794
+                            ],
+                            [
+                                1.7538603482693702,
+                                41.183341295396275
+                            ],
+                            [
+                                1.7515221855838945,
+                                41.183341295396275
+                            ]
+                        ]
+                    ],
+                    "type": "Polygon"
+                }
+            }
+        }
         self.mc.insert_document("programmes", d)
+        self.mc.insert_document("programmes", d2)
 
     def test_10_add_profile_sensor(self):
         """Adding a sensor with profile data"""
@@ -988,6 +1027,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "where": {
                 "@stations": "OBSEA"
             },
+            "fieldOfView": {
+                "@programmes": "OBSEA_Biotop"
+            },
             "description": "Desplegat el IPC608 a l'OBSEA"
         }  # IPC608 camera deployment
         post_json(self.mmapi_url + "/activities", d)
@@ -1031,10 +1073,12 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "export": {
                 "erddap": {
                     "resources": [{
+                        "id": "OBSEA_CTD_full",
                         "host": "localhost",
                         "path": "./datasets",
                         "period": "daily",
-                        "format": "netcdf"
+                        "format": "netcdf",
+                        "dataType": "timeseries"
                     }]
                 },
                 "fileserver": {
@@ -1043,11 +1087,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                         "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
                         "period": "monthly",
                         "format": "netcdf",
-                        "resource_id": "netcdf_dataset"
+                        "id": "netcdf_dataset",
+                        "dataType": "timeseries"
                     }]
                 },
                 "ckan": {
                     "resources": [{
+                        "id": "netcdf_dataset",
                         "link": "$fileserver/netcdf_dataset",
                         "title": "CTD data at OBSEA observatory full data",
                         "description": "data from various CTD sensors at OBSEA observatory full data"
@@ -1093,23 +1139,28 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "export": {
                 "erddap": {
                     "resources": [{
+                        "id": "OBSEA_CTD_30min",
                         "host": "localhost",
                         "path": "./datasets",
                         "period": "daily",
-                        "format": "netcdf"
+                        "format": "netcdf",
+                        "dataType": "timeseries",
+                        "averagePeriod": "30min"
                     }]
                 },
                 "fileserver": {
                     "resources": [{
+                        "id": "netcdf_dataset",
                         "host": "localhost",
                         "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_30min",
                         "period": "yearly",
                         "format": "netcdf",
-                        "resource_id": "netcdf_dataset"
+                        "dataType": "timeseries"
                     }]
                 },
                 "ckan": {
                     "resources": [{
+                        "id": "ctd",
                         "link": "$fileserver/netcdf_dataset",
                         "title": "CTD data at OBSEA observatory 30 min average",
                         "description": "data from various CTD sensors at OBSEA observatory averaged every 30min"
@@ -1150,15 +1201,17 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "export": {
                 "fileserver": {
                     "resources": [{
+                        "id": "zip_pics",
                         "host": "localhost",
                         "path": "/var/tmp/mmapi/volumes/files/datasets/IPC608_pics",
                         "period": "yearly",
                         "format": "zip",
-                        "resource_id": "zip_pics"
+                        "dataType": "files"
                     }]
                 },
                 "ckan": {
                     "resources": [{
+                        "id": "zip",
                         "link": "$fileserver/zip_pics",
                         "title": "Pictures from camera IPC608 at OBSEA",
                         "description": "pictures taken from a IPC608 camera at OBSEA"
@@ -1198,17 +1251,21 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "dataType": "detections",
             "export": {
                 "fileserver": {
-                    "resources": [{
+                    "resources": [
+                    {
+                        "id": "darwin_core_dataset",
                         "host": "localhost",
                         "path": "/var/tmp/mmapi/volumes/files/datasets/biodiversity_datasets",
                         "period": "yearly",
-                        "format": "csv",
-                        "resource_id": "biodiversity_dataset"
-                    }]
+                        "format": "dwca",
+                        "dataType": "json"
+                    }
+                    ]
                 },
                 "ckan": {
                     "resources": [{
-                        "link": "$fileserver/biodiversity_dataset",
+                        "id": "darwin_core_dataset",
+                        "link": "$fileserver/darwin_core_dataset",
                         "title": "Fish detections",
                         "description": "Fish detections in CSV format"
                     }]
@@ -1343,11 +1400,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         filename = "test31.csv"
         df.to_csv(filename, index=False)
-        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata")
+        bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata")
 
         self.info("Now, let's get the data and check that it's the same")
         temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
-        rich.print(f"TEMP ID: {temp_id}")
         # Now, let's download all the data that we injected, see if it's available
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
         results = data["value"]
@@ -1356,13 +1412,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         self.info("Let's make sure that we have an exception when try to load 2 times the same data")
         with self.assertRaises(psycopg2.errors.UniqueViolation):
-            bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata")
+            bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata")
 
         self.info("Let's delete some data and try to reload the gaps with missing-data")
         sta.exec_query(f"delete from timeseries where timestamp between '2023-02-01T00:00:00Z' and "
                        f"'2023-02-28T00:00:00Z';", fetch=False)
 
-        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA",
+        bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA",
                        tmp_folder="./tmpdata", missing_data="direct")
 
         self.info("Now, let's get the data and check that it's the same")
@@ -1393,7 +1449,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
         rows_before = len(data["value"])
-        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA",
+        bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA",
                        tmp_folder="./tmpdata", missing_data="hourly")
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
         self.assertEqual(rows_before + 48, len(data["value"]))  # we should have now 48 more rows
@@ -1432,16 +1488,24 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         sta = self.dc.sta
         sta.initialize_dicts()  # update dicts
-        print(df)
         filename = "test33.csv"
         df.to_csv(filename, index=False)
-        foi_id = sta.value_from_query('select "ID" from "FEATURES" limit 1;')
-        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata", average="30min")
 
+        start = pd.Timestamp(df["timestamp"].min())
+        end = pd.Timestamp(df["timestamp"].max())
+
+        rich.print("==== ALL deployments")
+        deployments = self.mc.get_sensor_deployments("SBE37")
+        rich.print(deployments)
+
+        rich.print("==== Interval deployments")
+        deployments = self.mc.get_sensor_deployments("SBE37", interval=(start, end))
+
+        bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA",
+                       tmp_folder="./tmpdata", average="30min")
         os.remove(filename)
         self.info("Now, let's get the data and check that it's the same")
         temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries", average="30min")
-        rich.print(f"TEMP ID: {temp_id}")
         # Now, let's download all the data that we injected, see if it's available
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations",
                         params={
@@ -1542,10 +1606,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         filename = "test41.csv"
         df.to_csv(filename)
         with self.assertRaises(AssertionError):
-            bulk_load_data(filename, self.conf["sensorthings"], "AWAC", "banana", "OBSEA", tmp_folder="./tmpdata")
+            bulk_load_data(filename, self.conf, "AWAC", "banana", "OBSEA", tmp_folder="./tmpdata")
 
         # Now use the correct data type
-        bulk_load_data(filename, self.conf["sensorthings"], "AWAC", "profiles", "OBSEA", tmp_folder="./tmpdata")
+        bulk_load_data(filename, self.conf, "AWAC", "profiles", "OBSEA", tmp_folder="./tmpdata")
         os.remove(filename)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -1596,7 +1660,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df.to_csv(filename)
 
         # Now use the correct data type
-        bulk_load_data(filename, self.conf["sensorthings"], "SBE37", "profiles", "OBSEA",
+        bulk_load_data(filename, self.conf, "SBE37", "profiles", "OBSEA",
                        tmp_folder="./tmpdata")
         os.remove(filename)
 
@@ -1706,7 +1770,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df.to_csv(datafile)
 
         # Now, bulk load it!
-        bulk_load_data(datafile, self.conf["sensorthings"], "IPC608", "files", "OBSEA",
+        bulk_load_data(datafile, self.conf, "IPC608", "files", "OBSEA",
                        tmp_folder="./tmpdata")
         os.remove(datafile)
 
@@ -1738,7 +1802,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         datafile = "test51-inference.csv"
         df.to_csv(datafile)
 
-        bulk_load_data(datafile, self.conf["sensorthings"], "IPC608", "files", "OBSEA",
+        bulk_load_data(datafile, self.conf, "IPC608", "files", "OBSEA",
                        tmp_folder="./tmpdata")
         os.remove(datafile)
 
@@ -1774,7 +1838,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df = pd.DataFrame(data)
         datafile = "test51-detections.csv"
         df.to_csv(datafile)
-        bulk_load_data(datafile, self.conf["sensorthings"], "IPC608", "detections", "OBSEA",
+        bulk_load_data(datafile, self.conf, "IPC608", "detections", "OBSEA",
                        tmp_folder="./tmpdata")
         os.remove(datafile)
 
@@ -1874,18 +1938,14 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     def test_70_propagate_to_ckan(self):
         propagate_metadata_to_ckan(self.mc, self.ckan, collections=[])
 
-
     def test_71_generate_fileserver_datasets(self):
         """Creating a dataset"""
         os.makedirs("datasets", exist_ok=True)
 
         # Export datasets with the default format (NetCDF)
-        nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver")
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", overwrite=True)
         for nc_dataset in nc_datasets:
             self.assertTrue(check_url(nc_dataset.url))
-
-        with self.assertRaises(ValueError):
-            self.dc.generate_dataset("obsea_ctd_full", "fileserver")
 
         # delete one dataset and ensure that we get an error when accessing it
         file_path = self.dc.fileserver.url2path(nc_datasets[0].url)
@@ -1898,12 +1958,12 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             self.assertTrue(check_url(nc_dataset.url))
 
         # Export as CSV datasets
-        csv_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", fmt="csv")
+        csv_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", fmt="csv", overwrite=True)
         for csv_dataset in csv_datasets:
             self.assertTrue(check_url(csv_dataset.url))
 
         # Export NetCDF
-        nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "fileserver")
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "fileserver", overwrite=True)
         for nc_dataset in nc_datasets:
             self.assertTrue(check_url(nc_dataset.url))
 
@@ -1917,13 +1977,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 continue
             self.assertTrue(check_url(zip_dataset.url))
 
+        dwca_dataset = self.dc.generate_dataset("biodiversity_datasets", "fileserver", "2020-01-01", "2020-02-01")
 
     def test_72_generate_ckan_datasets(self):
         self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01") # default format
         self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01", fmt="csv") # froce csv
         self.dc.generate_dataset("obsea_ctd_30min", "ckan", "2020-01-01", "2021-02-01")
         self.dc.generate_dataset("IPC608_pics", "ckan", "2020-01-01", "2020-02-01")
-
 
     def test_80_config_erddap(self):
         """creates a dataset and upload it to ERDDAP"""
@@ -1955,7 +2015,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         nc_dataset.configure_erddap("conf/datasets.xml", data_path)
         nc_dataset.reload_erddap_dataset("erddapData")
 
-            # Now get ERDDAP data!
+        # Now get ERDDAP data!
         erddap_dataset = "mydataset.csv"
         dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
         self.info(f"Downloading dataset from erddap: {dataset_url}")

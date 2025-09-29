@@ -11,17 +11,15 @@ created: 23/3/21
 
 import requests
 import json
-import rich
 from mmm.common import normalize_string, LoggerSuperclass, PRL, assert_type, download_file, run_over_ssh, check_url, \
-    file_list
-from mmm.dataset import generate_dataset_resource_id
+    file_list, assert_types
 from mmm.fileserver import FileServer
 from mmm import MetadataCollector
 from PIL import Image
 import logging
 import os
 from mmm.plotter import auto_plotter
-
+import rich
 
 def resize_pic(image: Image, max_width=1920):
     original_width, original_height = image.size
@@ -121,10 +119,10 @@ class CkanClient(LoggerSuperclass):
         registered_packages = [p.replace("-", "_") for p in registered_packages]
 
         if package_id in registered_packages:
-            rich.print(f"[cyan]Dataset '{package_id}' already registered, patching")
+            self.info(f"Dataset '{package_id}' already registered, patching")
             action = "patch"
         else:
-            rich.print(f"[green]Creating new dataset '{package_id}'")
+            self.info(f"Creating new dataset '{package_id}'")
 
         data = {
             "name": name,
@@ -141,11 +139,11 @@ class CkanClient(LoggerSuperclass):
         }
 
         if action == "patch":
-            rich.print(f"Package {package_id} already exists, patching...")
+            self.info(f"Package {package_id} already exists, patching...")
             url = self.url + f"package_patch"
             return self.ckan_patch(url, data)
         else:
-            rich.print(f"Registering {package_id}...")
+            self.info(f"Registering {package_id}...")
             url = self.url + "package_create"
             return self.ckan_post(url, data)
 
@@ -208,11 +206,11 @@ class CkanClient(LoggerSuperclass):
             datadict["url"] = resource_url
 
         if action == "patch":
-            rich.print(f"resource {resource_id} already exists, patching...")
+            self.info(f"resource {resource_id} already exists, patching...")
             url = self.url + f"resource_patch"
             return self.ckan_patch(url, datadict)
         else:
-            rich.print(f"Registering new resource '{resource_id}'...")
+            self.info(f"Registering new resource '{resource_id}'...")
             url = self.url + "resource_create"
             return self.ckan_post(url, datadict)
 
@@ -344,8 +342,7 @@ class CkanClient(LoggerSuperclass):
 
         resp = requests.post(url, data=data, headers=headers, files=resource)
         if resp.status_code > 300:
-            rich.print(f"[red]{json.dumps(json.loads(resp.text), indent=2)}")
-            raise ValueError(f"CKAN HTTP Error code {resp.status_code}")
+            self.error(f"{resp.text}", exception=ValueError)
         return json.loads(resp.text)["result"]
 
     def ckan_patch(self, url, data):
@@ -356,8 +353,8 @@ class CkanClient(LoggerSuperclass):
         headers['Content-Type'] = "application/json"
         resp = requests.post(url + f"?id={identifier}", data=data, headers=headers)
         if resp.status_code > 300:
-            rich.print(f"[red]{resp.text}")
-            raise ValueError(f"CKAN HTTP Error code {resp.status_code}")
+            self.info(f"[red]{resp.text}")
+            self.error(f"{resp.text}", exception=ValueError)
         response = json.loads(resp.text)["result"]
         return response
 
@@ -372,94 +369,78 @@ class CkanClient(LoggerSuperclass):
         patch_data["id"] = id
         return self.ckan_post(url, patch_data)
 
-    def process_mmapi_dataset(self, dataset_conf: dict, datasets={}, fmt="") -> list:
-        """
-        Processes a dataset configured in MMAPI. The CKAN package will point to an existing file in the fileserver (or
-        any other location). There are two options:
-            1) Point to a fixed resource with an uri
-            2) Reference a dataset in the fileserver
-        For option 1) this configuration can be used by adding a http link to the "link" field
-            {
-              "link": https://link.to.the/resource.csv
-              "name": "optical mosaic",
-              "description": "geo-referenced optical mosaic in tif format",
-              "resource_id": "plome_deep_mission_01_optical_mosaic"
-            },
-
-        For option 2) a special string as to be put in link, following a $fileserver/<resource_id> pattern, like
-            {
-              "link": "$fileserver/navigation",
-              "name": "Girona500 navigation with pictures",
-              "description": "Girona500 navigation with pictures",
-              "resource_id": "plome_deep_mission_01_navigation"
-            }
-        Configuration will check for a dataset in fileserver section and try to guess the file by running an ls
-        command via ssh. The previous example was pointing to this fileserver configuration:
-            {
-              "host": "plometest",
-              "path": "/opt/files/datasets/PLOME/PLOME_DEEP_mission_01",
-              "format": "csv",
-              "period": "none",
-              "resource_id": "navigation"
-            }
-        """
+    def process_mmapi_dataset(self, dataset_conf: dict, resources: list = []) -> list:
         assert_type(dataset_conf, dict)
-        resources = []
+        assert_types(resources, [list, type(None)])
+
         try:
-            resources = dataset_conf["export"]["ckan"]["resources"]
+            r = dataset_conf["export"]["ckan"]["resources"]
         except KeyError:
             self.error("exporter/ckan/resources not found in dataset config!", exception=KeyError)
 
-        dataset_id = dataset_conf["#id"].lower()
+        dataset_id = dataset_conf["#id"]
+        ckan_dataset_id = dataset_id.lower()  # CKAN accepts only lower case ids
+        dataset_resources = dataset_conf["export"]["ckan"]["resources"]
 
-        for resource in resources:
-            self.info(f"Registering resource {resource['title']}")
-            # Check if url references a previous dataset
+        # Keep only resources in the resource list
+        if resources:
+            all_resources = [r["id"] for r in dataset_resources]
+            for r in resources:
+                assert r in all_resources, f"Dataset resource '{r}' not recognized"
+
+            self.info(f"Keeping the following resources: {resources}")
+            dataset_resources = [r for r in dataset_resources if r["id"] in resources]
+
+        # Create a list of resources to be posted to ckan like (resource, link, date_start, date_end)
+        # If resource does not have associated dates, just use None)
+        for resource in dataset_resources:
+            resource_id = resource["id"]
+            ckan_resources = []
             if resource["link"].startswith("$fileserver"):
-                self.info(f"Trying to guess a dataset file stored at fileserver")
-                # The reference should be $fileserver/<resource_id>, e.g. $fileserver/navigation
-                resource_id = resource["link"].split("/")[1]  # skip $
-                fileserver_conf = {}
-                for fileserver_resource in dataset_conf["export"]["fileserver"]["resources"]:
-                    if fileserver_resource["resource_id"] == resource_id:
-                        fileserver_conf = fileserver_resource
-                        break
+                # This is a resource linked to another service
+                fileserver_resource = self.get_linked_resource_conf(dataset_conf, resource["link"])
+                fmt = fileserver_resource["format"]
+                df = self.mc.db.dataframe_from_query(
+                    f"""
+                    select dataset_id, resource_id, data_from, data_to, url, path
+                    from {self.mc.dataset_registry_table}
+                    where dataset_id = '{dataset_id}' and resource_id = '{resource_id}'
+                    ; 
+                    """)
 
-                if not fileserver_conf:
-                    self.error(f"Fileserver conf {resource['link']} not found!", exception=LookupError)
-                # Now try to guess which file it is via ls through ssh
+                for _, row in df.iterrows():
+                    ckan_resources.append((resource, row["url"], row["data_from"], row["data_to"]))
 
-                path = fileserver_conf["path"]
+            elif resource["link"].startswith("https"):
+                # This resource is an absolute link to an external resource
+                ckan_resources.append((resource, resource["link"], None, None))
 
-                if not fmt:
-                    fmt = fileserver_conf["format"]
+            else:
+                self.error("Unimplemented resource type, expected HTTPS link or fileserver reference", exception=ValueError)
 
-                extension = fmt
+            # Now create or update all the resources:
+            for resource, link, tstart, tend in ckan_resources:
+                ckan_resource_id = dataset_id + "_" + resource["id"]
+                description = resource["description"]
+                if tstart and tend:
+                    # In case we have multiple files for the same resource, append start and end date
+                    ckan_resource_id += f'_{tstart.strftime("%Y%m%d")}_{tend.strftime("%Y%m%d")}'
+                    description += f'from {tstart.strftime("%Y-%m-%d")} to {tend.strftime("%Y-%m-%d")}'
 
-                # In some cases the extension does not match tne format, process it
-                if extension.lower() == "netcdf":
-                    extension = "nc"
+                fmt = link.split(".")[-1]
 
-                self.info(f"Getting number of files in {self.fileserver.host}:{path} with extension {extension}")
-                df = self.mc.db.dataframe_from_query(f"""
-                    select * from {self.mc.dataset_registry_table} where dataset_id = '{dataset_id}'; 
-                """)
-                for idx, row in df.iterrows():
+                if fmt.lower() == "nc":
+                    fmt = "NetCDF"
 
-                    if not row["path"].endswith(extension):
-                        # ignore extensions that do not match
-                        continue
-                    start = row["data_from"].strftime("%Y-%m-%d")
-                    end = row["data_to"].strftime("%Y-%m-%d")
-                    self.resource_create(
-                        dataset_id,
-                        row["resource_id"],
-                        description=resource["description"] + f" from {start} to {end}",
-                        name=resource["title"],
-                        resource_url=row["path"],
-                        format=fmt
-                    )
-                    self.generate_dataset_preview(dataset_id, row["resource_id"], row["url"])
+                self.resource_create(
+                    ckan_dataset_id,
+                    ckan_resource_id,
+                    description=description,
+                    name=resource["title"],
+                    resource_url=link,
+                    format=fmt
+                )
+                self.generate_dataset_preview(dataset_id, ckan_resource_id, link)
         return []
 
     def generate_dataset_preview(self, dataset_id: str, resource_id: str, resource_url: str,
@@ -470,10 +451,7 @@ class CkanClient(LoggerSuperclass):
         assert_type(resource_url, str)
         assert_type(path, str)
 
-        self.info(f"Registering dataset view for {dataset_id} resource {resource_id}")
-        self.info(f"    dataset_id={dataset_id}")
-        self.info(f"    resource_id={resource_id}")
-        self.info(f"    resource_url={resource_url}")
+        self.info(f"Registering dataset view for {dataset_id}")
         filename = "./" + resource_url.split("/")[-1]
         extension = filename.lower().split(".")[-1]
         resource_view_file = filename.lower().replace(extension, "jpeg")
@@ -546,3 +524,23 @@ class CkanClient(LoggerSuperclass):
         elif action == "patch":
             # Patch the view!
             self.ckan_patch(self.url + "resource_view_update", d)
+
+
+    def get_linked_resource_conf(self, dataset_conf: dict, link: str):
+        """
+        In a linked dataset to $fileserver, get the configuration
+        :param dataset_conf:
+        :param link:
+        :return:
+        """
+        resource_id = link.split("/")[1]  # skip $
+        fileserver_conf = {}
+        for fileserver_resource in dataset_conf["export"]["fileserver"]["resources"]:
+            if fileserver_resource["id"] == resource_id:
+                fileserver_conf = fileserver_resource
+                break
+
+        if not fileserver_conf:
+            self.error(f"Fileserver conf {link} not found!", exception=LookupError)
+
+        return fileserver_conf

@@ -90,7 +90,7 @@ def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str,
         log.info("Sending all files")
         dc.fileserver.bulk_send(list(fs_df["src"]), list(fs_df["dst"]))
 
-    bulk_load_data(csv_filename, secrets["sensorthings"], "", sensor_name, "files", foi_name, usecs=usecs)
+    bulk_load_data(csv_filename, secrets, "", sensor_name, "files", foi_name, usecs=usecs)
 
 
 

@@ -1013,7 +1013,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         """
         self.value_from_query('select setval(\'"OBSERVATIONS_ID_seq"\', (select max("ID") from "OBSERVATIONS") );')
 
-    def get_datastream_config(self, sensor="", data_type="", average_period="", full_data=False):
+    def get_datastream_config(self, sensor="", station="", data_type="", average_period="", full_data=False):
         """
         returns a dataframe with the following columns:
             datastream_id, datastream_name, variable_id, variable_name, data_type, and average_period
@@ -1032,6 +1032,9 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             elif type(sensor) is int:
                 sensor_id = sensor
 
+        if station:
+            station_id = self.value_from_query(f'select "ID" from "THINGS" where "NAME" = \'{station}\';')
+
         query = '''
             select 
                 "DATASTREAMS"."ID" as datastream_id,
@@ -1048,9 +1051,10 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         '''
         if sensor:
             query = query.replace(";", f'where "SENSOR_ID" = {sensor_id};')
+        if station:
+            query = query.replace(";", f' and "THING_ID" = {station_id};')
 
         df = self.dataframe_from_query(query)
-
         # Now filter the results based on type, average or fullData
         if data_type:
             df = df[df["data_type"] == data_type]
@@ -1103,7 +1107,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 '{tstart}' and '{tend}' order by timestamp asc;
             """
         else:
-            # go to generic OBSERVATIONS table
+            # go to the generic OBSERVATIONS table
             query = f"""
                 select distinct "PHENOMENON_TIME_START" from "OBSERVATIONS" where "DATASTREAM_ID" in ({datastream_ids}) and
                 "PHENOMENON_TIME_START" between '{tstart}' and '{tend}' order by "PHENOMENON_TIME_START" asc;
@@ -1120,7 +1124,5 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         else:
             df_out = detect_data_gaps_by_period(df, times, "1h")  # check data gaps by period
 
-        self.info(f"Detected {len(df_out)} rows missing, {100*(len(df_out)/rows):.02f} %%")
+        self.info(f"get_missing_data: Detected {len(df_out)} rows missing, {100*(len(df_out)/rows):.02f} %%")
         return df_out
-
-

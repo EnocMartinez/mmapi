@@ -134,6 +134,7 @@ class MetadataCollector(LoggerSuperclass):
         self.default_author = default_author
         self.organization = organization
         self.__connection_chain = connection
+        self.__taxa_aphia_dict = {}
 
         host = connection["db_host"]
         port = connection["db_port"]
@@ -211,7 +212,7 @@ class MetadataCollector(LoggerSuperclass):
             query = f"""
             CREATE TABLE IF NOT EXISTS {self.dataset_registry_table}
                 (
-                    resource_id TEXT PRIMARY KEY,
+                    resource_id TEXT NOT NULL,
                     dataset_id TEXT NOT NULL,
                     data_from timestamp with time zone,
                     data_to timestamp with time zone,
@@ -222,6 +223,10 @@ class MetadataCollector(LoggerSuperclass):
                 )
             """
             self.db.exec_query(query, fetch=False)
+            self.db.exec_query(
+                f"ALTER TABLE {self.dataset_registry_table} ADD UNIQUE (resource_id, dataset_id, data_from, data_to);",
+                fetch=False
+            )
 
         # History database
         for collection in self.collection_names:
@@ -982,7 +987,7 @@ class MetadataCollector(LoggerSuperclass):
         return deployments
 
 
-    def get_sensor_deployments(self, sensor: dict|str) -> list:
+    def get_sensor_deployments(self, sensor: dict|str, interval=()) -> list:
         """
         Returns a list of dicts with the info of each deployment registered in the sensor.
             [
@@ -994,6 +999,8 @@ class MetadataCollector(LoggerSuperclass):
                 },
                 ...
             ]
+
+        If interval is passed, only the deployments within the interval are returned
         """
         assert_types(sensor, [str, dict])
         if type(sensor) is str:
@@ -1008,12 +1015,39 @@ class MetadataCollector(LoggerSuperclass):
         except LookupError:
             self.warning(f"No deployments for sensor {sensor_id}")
             return []
+
         for deployment in deployments:
             station_id = deployment["station"]
             latitude, longitude, depth = self.get_station_coordinates(station_id, timestamp=deployment["start"])
             deployment["coordinates"] = {"latitude": latitude, "longitude": longitude, "depth": depth}
 
+        if interval:
+            valid_start, valid_end = interval
+            assert_type(valid_start, pd.Timestamp)
+            assert_type(valid_end, pd.Timestamp)
+            deployments_inside_interval = []
+            for dep in deployments:
+                if dep["start"] <= valid_start:
+                    if isinstance(dep["end"], pd.Timestamp):
+                        if dep["end"] >= valid_end:
+                            deployments_inside_interval.append(dep)
+                    elif isinstance(dep["end"] , type(None)):
+                        deployments_inside_interval.append(dep)
+            deployments = deployments_inside_interval
         return deployments
+
+    def get_sensor_deployment(self, sensor: dict|str, timestamp: pd.Timestamp) -> (float, float, float, dict):
+        """Gets the sensor deployment at a certain moment in time
+
+        return latitude, longitude, depth and a dict with options like "fieldOfView"
+        """
+        deployments = self.get_sensor_deployments(sensor)
+
+        if len(deployments) != 1:
+            raise ValueError("Unimplemented! Expected only one sensor deployment")
+        d = deployments[0]["coordinates"]
+        return d["latitude"], d["longitude"], d["depth"]
+
 
     def get_station_deployments(self, station: dict|str) -> list:
         """
@@ -1037,8 +1071,6 @@ class MetadataCollector(LoggerSuperclass):
             raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
 
         station_id = station["#id"]
-
-
         deployments = self.__get_deployments("stations", station_id)
 
         # Get all sensors that have been deployed into this platform
@@ -1180,6 +1212,18 @@ class MetadataCollector(LoggerSuperclass):
                 return False
             return True
         return False
+
+    def get_taxa_aphia_dict(self):
+        """
+        Looks all registered variables and stores taxa variables in a dictionary with key: scientific name, value: aphia ID
+        :return: dict
+        """
+        if not self.__taxa_aphia_dict:
+            for doc in self.get_documents("variables"):
+                if "worms_id" in doc.keys():
+                    self.__taxa_aphia_dict[doc["standard_name"]] = doc["worms_id"]
+        
+        return self.__taxa_aphia_dict
 
 def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
     return mc.get_station_deployments(station)

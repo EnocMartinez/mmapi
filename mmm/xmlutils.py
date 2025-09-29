@@ -7,11 +7,9 @@ Common functions and classes defined here
 
 import sys
 import lxml.etree as etree
-from lxml.etree import SubElement
-import requests
-from common import RED, CYN, RST
+from mmm.common import RED, CYN, RST
 
-# Namespaces used by SensorML, SOS and O&M Ddocuments
+# Namespaces used by SensorML, SOS, O&M and Darwin Core
 
 
 ns = {'swe':'http://www.opengis.net/swe/2.0',
@@ -29,7 +27,9 @@ ns = {'swe':'http://www.opengis.net/swe/2.0',
       'drt': 'http://www.opengis.net/drt/1.0',
       'gda': 'http://www.opengis.net/sosgda/1.0',
       "gmd": "http://www.isotc211.org/2005/gmd",
-      "gco": "http://www.isotc211.org/2005/gco"}
+      "gco": "http://www.isotc211.org/2005/gco",
+      'dwc': 'http://rs.tdwg.org/dwc/text/'
+}
 
 __enable_debug__ = False
 
@@ -358,3 +358,17 @@ def append_before(root, tag, element, comment=""):
         i += 1
 
     root.insert(i, element)
+
+
+def serialize_xml(tree):
+    etree.indent(tree, space="  ", level=0)
+    return etree.tostring(tree, encoding="unicode", pretty_print=True, xml_declaration=False)
+
+
+def create_element(root, name, text="", attr="", attr_value=""):
+    e = etree.SubElement(root, name)
+    if text:
+        e.text = text
+    if attr and attr_value:
+        e.attrib[attr] = attr_value
+    return e

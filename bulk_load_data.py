@@ -31,6 +31,8 @@ if __name__ == "__main__":
     argparser.add_argument("--usecs", help="use microsecond precision", action="store_true")
     argparser.add_argument("-F", "--foi", help="FeatureOfInterest ID to assign to the Observations", type=str, required=False)
     argparser.add_argument("--missing-data", help="Inject data that is not already in the database",  type=str, required=False)
+    argparser.add_argument("--station-name", help="Ignore metadata records and assign data to station", type=str,
+                           required=False)
     args = argparser.parse_args()
     
     with open(args.secrets) as f:
@@ -38,7 +40,6 @@ if __name__ == "__main__":
 
     mc = init_metadata_collector(secrets)
 
-    psql_conf = load_fields_from_dict(secrets["sensorthings"], ["database", "user", "host", "port", "password"])
     url = secrets["sensorthings"]["url"]
 
     if int(args.timeseries) + int(args.profiles) + int(args.detections) + int(args.json) + int(args.files) != 1:
@@ -62,8 +63,8 @@ if __name__ == "__main__":
     if args.missing_data:
         assert args.missing_data in ["hourly", "direct"], f"Expected 'hourly' or 'direct', but got {args.missing_data} instead "
 
-    bulk_load_data(args.file, psql_conf, args.sensor_id, data_type, args.foi, average=args.average, no_qc=args.no_qc,
-                   usecs=args.usecs, missing_data=args.missing_data)
+    bulk_load_data(args.file, secrets, args.sensor_id, data_type, args.foi, average=args.average, no_qc=args.no_qc,
+                   usecs=args.usecs, missing_data=args.missing_data, station_name=args.station_name)
 
 
 

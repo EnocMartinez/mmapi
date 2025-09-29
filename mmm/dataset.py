@@ -21,30 +21,10 @@ import time
 from mmm.common import validate_schema, LoggerSuperclass, CYN, GRN, assert_type, run_over_ssh, run_subprocess
 import logging
 
-def generate_dataset_resource_id(dataset_id: str, fmt: str,  tstart: pd.Timestamp, tend: pd.Timestamp) -> str:
-    """
-    Generates a dataset resource ID from the dataset ID, format and time range
-    :param dataset_id:
-    :param fmt:
-    :param tstart:
-    :param tend:
-    :return:
-    """
-    assert_type(dataset_id, str)
-    assert_type(fmt, str)
-    assert_type(tstart, pd.Timestamp)
-    assert_type(tend, pd.Timestamp)
-    assert dataset_id, "dataset_id cannot be empty"
-    assert fmt, "format cannot be empty"
-
-    tfmt = "%Y%m%d"
-    start = tstart.strftime(tfmt)
-    end = tend.strftime(tfmt)
-    return f"{dataset_id}_{fmt}_{start}_{end}"
 
 class DatasetObject(LoggerSuperclass):
     def __init__(self, mc: MetadataCollector, fileserver: FileServer, conf: dict, filename: str, service_name: str, resource: dict,
-                 tstart: pd.Timestamp | str, tend: pd.Timestamp | str, fmt: str, log: logging.Logger):
+                 tstart: pd.Timestamp | str, tend: pd.Timestamp | str, fmt: str, log: logging.Logger, delivered=False):
         """
         This object contains all the metadata related to a dataset (or data file) and provides methods to deliver,
         update it.
@@ -65,8 +45,26 @@ class DatasetObject(LoggerSuperclass):
         validate_schema(conf, mmm_schemas["datasets"], [])
         self.mc = mc
         self.fileserver = fileserver
+        self.delivered = False  # will be set to True once the data object has been sent
 
-        assert os.path.isfile(filename), f"file '{filename}' does not exist!"
+        if delivered:
+            # File should be available at destination
+            self.debug("Ensuring that remote file exists")
+            output = run_over_ssh(self.fileserver.host, f"ls -l --full-time {filename}")
+            if not output:
+                raise AssertionError(f"File {filename} not found in {self.fileserver.host}")
+            self.delivered = True
+
+            # Get the creation time remotely
+            date, time_t, tz = output.split(" ")[5:8]
+            time_str = f"{date}T{time_t}{tz}"
+            self.ctime = pd.Timestamp(time_str)
+            self.size = output.split(" ")[4]
+        else:
+            # File should be local
+            assert os.path.isfile(filename), f"file '{filename}' does not exist!"
+            self.ctime = pd.Timestamp(os.path.getctime(filename))
+            self.size = os.path.getsize(filename)
 
         # Convert strings
         if type(tstart) is str:
@@ -90,24 +88,22 @@ class DatasetObject(LoggerSuperclass):
         self.tstart = tstart
         self.tend = tend
         self.url = ""
-        self.ctime = pd.Timestamp(os.path.getctime(filename))
-        self.size = os.path.getsize(filename)
 
         tfmt = "%Y%m%d"
         start = self.tstart_str(tfmt)
         end = self.tend_str(tfmt)
-        self.dataset_resource_id = generate_dataset_resource_id(self.dataset_id, self.fmt, self.tstart, self.tend)
+        resource_id = resource["id"]
         self.service_name = service_name
 
         # Store the configuration for all export services, we don't know yet to which service the data object
         # will be delivered.
+
         config = resource
         self.exporter = DataExporter(config, self.dataset_id, self.fileserver, self.log)
-
-        self.delivered = False  # will be set to True once the data object has been sent
-
         self.erddap_configured = False
         self.erddap_dataset_id = ""
+
+        self.resource_id = resource["id"]
 
     def tstart_str(self, fmt="%Y-%m-%dT%H:%M:%SZ"):
         return self.tstart.strftime(fmt)
@@ -122,22 +118,22 @@ class DatasetObject(LoggerSuperclass):
         :return: URL (if fileserver is passed) or filesystem path
         """
 
-        if self.delivered:
-            raise ValueError("Dataset already delivered!")
-
-        exporter = self.exporter
-        self.url = exporter.deliver_dataset(self.filename, self.tstart)
-        self.delivered = True
+        if not self.delivered:
+            self.info("Dataset already delivered!")
+            self.delivered = True
+            self.url = self.exporter.deliver_dataset(self.filename, self.tstart)
+        else:
+            self.url = self.fileserver.path2url(self.filename)
 
         if self.service_name == "fileserver":
             path = self.fileserver.url2path(self.url)
-            if self.mc.dataset_resource_exists(self.dataset_resource_id) and overwrite:
-                self.info(f"Overwriting existing dataset resource with new one: {self.dataset_resource_id} ")
-                self.mc.dataset_resource_update(self.dataset_resource_id, self.dataset_id, self.tstart_str(),
+            if self.mc.dataset_resource_exists(self.resource_id) and overwrite:
+                self.info(f"Overwriting existing dataset resource with new one: {self.resource_id} ")
+                self.mc.dataset_resource_update(self.resource_id, self.dataset_id, self.tstart_str(),
                                             self.tend_str(), self.url, path)
             else:
-                self.info(f"Creating new dataset resource: {self.dataset_resource_id} ")
-                self.mc.dataset_resource_create(self.dataset_resource_id, self.dataset_id, self.tstart_str(),
+                self.info(f"Creating new dataset resource: {self.resource_id} ")
+                self.mc.dataset_resource_create(self.resource_id, self.dataset_id, self.tstart_str(),
                                                 self.tend_str(), self.url, path)
 
         return self.url
@@ -246,10 +242,6 @@ class DatasetObject(LoggerSuperclass):
         string += f"    delivered: {self.delivered}\n"
         string += f"-----------------------------------------"
         return string
-
-    @staticmethod
-    def generate_resource_id(dataset_id: str, fmt: str, tstart: pd.Timestamp, tend: pd.Timestamp):
-        return generate_dataset_resource_id(dataset_id, fmt, tstart, tend)
 
 
 class DataExporter(LoggerSuperclass):
