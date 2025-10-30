@@ -38,7 +38,7 @@ def get_properties(doc: dict, properties: list) -> dict:
     return data
 
 
-def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = [], datasets: list = []):
+def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, log: logging.Logger,  collections: list = [], datasets: list = []):
     """
     Propagates metadata from metadata database to CKAN
 
@@ -59,16 +59,12 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
     if len(collections) == 0:
         collections = mc.collection_names
 
-    rich.print("Propagating data from Metadata DB to CKAN")
-    rich.print(f"Using the following collections: {collections}")
+    log.info("Propagating data from Metadata DB to CKAN")
+    log.info(f"Using the following collections: {collections}")
 
     # Institutions
+    log.info("Propagating organizations to CKAN")
     if "organizations" in collections:
-        ckan_organizations = ckan.get_organization_list()
-        rich.print(ckan_organizations)
-
-        registered_orgs = ckan.get_organization_list()
-        rich.print(f"registered organizations: {registered_orgs}")
 
         for doc in mc.get_documents("organizations"):
             name = doc["#id"]
@@ -76,28 +72,28 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
 
             if "public" in doc.keys() and doc["public"]:
                 organization_id = doc["#id"].lower()
+
                 title = doc["fullName"]
                 extras = load_fields_from_dict(doc, ["ROR", "EDMO"])
                 if "logoUrl" in doc.keys():
                     image_url = doc["logoUrl"]
 
-                update = False
-                if organization_id in registered_orgs:
-                    update = True
-                ckan.organization_create(organization_id, name, title, extras=extras, image_url=image_url, update=update)
+                # Try to create all organizations, CkanClient will automatically detect if the organization needs to be
+                # created, updated or ignored (if it already exists)
+                ckan.organization_create(organization_id, name, title, extras=extras, image_url=image_url)
             else:
                 rich.print(f"[yellow]ignoring private organization {name}...")
 
     # CKAN Projects
+    log.info("Propagating groups to CKAN")
     if "projects" in collections:
         ckan_groups = ckan.get_group_list()
 
         for doc in mc.get_documents("projects"):
             if doc["type"] == "contract":
-                rich.print("ignore contract projects")
+                log.debug(f"Ingoring contract project '{doc['#id']}'")
                 continue
 
-            rich.print(f"propagating {doc['#id']}")
             project_id = doc["#id"].lower()
             acronym = doc["acronym"]
             name = acronym.lower()
@@ -114,9 +110,9 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
             logo = ""
             if "logoUrl" in doc.keys():
                 logo = doc["logoUrl"]
-
             ckan.group_create(project_id, name, acronym, description=title, extras=extras, image_url=logo)
 
+    log.info("Propagating datasets to CKAN")
     if "datasets" in collections:
         for doc in mc.get_documents("datasets"):
             name = doc["#id"]
@@ -125,9 +121,6 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
                 continue
             dataset_id = name.lower()
             package_name = dataset_id
-
-            rich.print(f"[orange1]Processing dataset {name}")
-
             title = doc["title"]
             description = doc["summary"]
             sensors = doc["@sensors"]

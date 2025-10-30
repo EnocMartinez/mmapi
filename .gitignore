@@ -1,4 +1,5 @@
 secrets.txt
+MetadataPO/*
 secrets*.yaml
 log/
 MongoData

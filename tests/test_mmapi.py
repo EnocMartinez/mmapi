@@ -1936,7 +1936,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.dc.sta.exec_query(f"delete from profiles where datastream_id = {detections_id};", fetch=False)
 
     def test_70_propagate_to_ckan(self):
-        propagate_metadata_to_ckan(self.mc, self.ckan, collections=[])
+        propagate_metadata_to_ckan(self.mc, self.ckan, self.log, collections=[])
 
     def test_71_generate_fileserver_datasets(self):
         """Creating a dataset"""

@@ -48,7 +48,7 @@ class MmapiClient(LoggerSuperclass):
             self.error(f"{url} returned {r.status_code}! text {r.text}", exception=ValueError)
         return json.loads(r.text)
 
-    def validate_doc(self, collection, doc):
+    def validate_doc(self, collection, doc) -> (bool, str):
         """
         Validates a document
         :param doc:
@@ -57,8 +57,14 @@ class MmapiClient(LoggerSuperclass):
         """
         self.debug(f"Validating {doc['#id']} against {collection}")
         url = self.url + "/mmapi/v1.0/validate/" + collection
-        r = requests.post(url, data=json.dumps(doc))
+        r = requests.post(url, data=json.dumps(doc), headers={"Content-Type": "application/json"})
         if r.status_code > 300:
             self.error(f"{url} returned {r.status_code}! text {r.text}", exception=ValueError)
-            return False
-        return True
+            return False, "HTTP Error"
+
+
+        resp = json.loads(r.text)
+        if resp["success"]:
+            return True, ""
+
+        return False, resp["message"]

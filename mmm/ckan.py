@@ -8,11 +8,10 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 23/3/21
 """
-
 import requests
 import json
 from mmm.common import normalize_string, LoggerSuperclass, PRL, assert_type, download_file, run_over_ssh, check_url, \
-    file_list, assert_types
+    file_list, assert_types, RST, BLU, WHT, CYN
 from mmm.fileserver import FileServer
 from mmm import MetadataCollector
 from PIL import Image
@@ -20,6 +19,7 @@ import logging
 import os
 from mmm.plotter import auto_plotter
 import rich
+import time
 
 def resize_pic(image: Image, max_width=1920):
     original_width, original_height = image.size
@@ -40,8 +40,75 @@ def process_extras(extras: dict) -> list:
     assert(type(extras) == dict)
     processed = []
     for key, value in extras.items():
+        if not isinstance(value, str):
+            value = str(value)
         processed.append({"key": key, "value": value})
     return processed
+
+
+def are_they_equal(element1, element2, key="") -> bool:
+    """
+    Return True if the two elements are equal, otherwise return false
+    """
+    if type(element1) != type(element2):
+        raise ValueError(f"different types found!, {element1} {element2}")
+
+    if type(element1) in [str, float, int, bool]:
+        if element1 != element2:
+            return False
+
+    elif isinstance(element1, list):
+
+        if key == "extras":
+            sortby = "key"
+        elif key == "groups":
+            sortby = "id"
+        else:
+            raise ValueError(f"Cannot sort list of elements with key='{key}'")
+
+        element1 = sorted(element1, key=lambda x: x[sortby])
+        element2 = sorted(element2, key=lambda x: x[sortby])
+
+
+        for v1, v2 in zip(element1, element2):
+            if not are_they_equal(v1, v2):
+                return False
+
+    elif isinstance(element1, dict):
+        for key, value in element1.items():
+            if not are_they_equal(element1[key], element2[key], key=key):
+                return False
+
+    else:
+        raise ValueError(f"Unimplemented data type {type(element1)}")
+
+    return True
+
+
+def updated_required(obj_list, obj) -> bool:
+    """
+    Checks if the target object needs to be updated. Return FALSE only if ALL parameters are exactly equal
+    the obj_list there may be additional params
+    :param obj_list: list of dicts coming directly from CKAN
+    :param obj: to check if it's in the later version
+    :return: True/False
+    """
+
+    obj_id = obj["id"]
+    existing = None
+    for o in obj_list:
+        if "id" not in o.keys():
+            continue
+        if o["id"] == obj_id:
+            existing = o
+            break
+
+    if not existing:
+        raise ValueError(f"Object with id '{obj_id}' not found in list!")
+
+    # if they are equal, no update required! Otherwise yes
+    return not are_they_equal(obj, existing)
+
 
 
 class CkanClient(LoggerSuperclass):
@@ -64,21 +131,15 @@ class CkanClient(LoggerSuperclass):
         self.org_logos_url = org_logos_url
         self.fileserver = fileserver
 
+        self.__cache_time = 300 # use cached values if they were processed less than 300 seconds ago
+        self.__cache = {
+            # cached list of elements, used to speed up things
+            # key->endpoint, value ->(cached_time, list)
+        }
+
     def upload_data_link(self, dataset_id, name, description, link):
         return self.resource_create(dataset_id, name.lower() + "_csv_data", name=name, description=description,
                                       resource_url=link, format="csv")
-
-    def get_organization_list(self):
-        """
-        Get the organizations in the CKAN
-        :return: list of dict's with organizations
-        """
-        url = self.url + "organization_list"
-        return self.ckan_get(url)
-
-    def get_license_list(self):
-        url = self.url + "license_list"
-        return self.ckan_get(url)
 
     # --------- Packages (Datasets) ---------#
     def get_packages(self) -> list:
@@ -88,12 +149,6 @@ class CkanClient(LoggerSuperclass):
         url = self.url + "current_package_list_with_resources"
         return self.ckan_get(url)
 
-    def get_package_list(self) -> list:
-        """
-        Get only the list of current packages
-        """
-        url = self.url + "package_list"
-        return self.ckan_get(url)
 
     def package_register(self, name, title, description="", id="", private=False, author="", author_email="",
                          license_id="cc-by", groups=[], owner_org="", extras={}):
@@ -113,17 +168,6 @@ class CkanClient(LoggerSuperclass):
         """
 
         # check if package eixsts
-        action = "create"
-        package_id = normalize_string(id)
-        registered_packages = self.get_package_list()
-        registered_packages = [p.replace("-", "_") for p in registered_packages]
-
-        if package_id in registered_packages:
-            self.info(f"Dataset '{package_id}' already registered, patching")
-            action = "patch"
-        else:
-            self.info(f"Creating new dataset '{package_id}'")
-
         data = {
             "name": name,
             "title": title,
@@ -138,25 +182,8 @@ class CkanClient(LoggerSuperclass):
             "extras": process_extras(extras)
         }
 
-        if action == "patch":
-            self.info(f"Package {package_id} already exists, patching...")
-            url = self.url + f"package_patch"
-            return self.ckan_patch(url, data)
-        else:
-            self.info(f"Registering {package_id}...")
-            url = self.url + "package_create"
-            return self.ckan_post(url, data)
+        self.object_create_or_update("package", data)
 
-    # def package_patch(self, patch_data: dict, id: str):
-    #     """
-    #     Edit attributes within the patch_data dict. The rest remains unchanged
-    #     :param patch_data: dict with data to pach
-    #     :param id: package id
-    #     :return: dataset dict
-    #     """
-    #     url = self.url + f"package_patch"
-    #     patch_data["id"] = id
-    #     return self.ckan_post(url, patch_data)
 
     def resource_create(self, package_id, resource_id, description="", name="", upload_file=None, resource_url="",
                         format=""):
@@ -182,15 +209,7 @@ class CkanClient(LoggerSuperclass):
         # cache_last_updated (iso date string) – (optional)
         # upload (FieldStorage (optional) needs multipart/form-data) – (optional)
 
-        if self.check_if_resource_exists(resource_id):
-            self.warning(f"Resource {resource_id} already exists, patching")
-            action = "patch"
-        else:
-            action = "post"
-
-        self.info(f"{action.upper() + 'ing'} resource '{resource_id}' to package '{package_id}' with format {format}")
-
-        datadict = {
+        data = {
             "id": resource_id,
             "package_id": package_id,
             "description": description,
@@ -198,21 +217,14 @@ class CkanClient(LoggerSuperclass):
         }
 
         if format:
-            datadict["format"] = format
+            data["format"] = format
         elif upload_file:
-            datadict["format"] = upload_file.split(".")[-1]
+            data["format"] = upload_file.split(".")[-1]
 
         if resource_url:
-            datadict["url"] = resource_url
+            data["url"] = resource_url
 
-        if action == "patch":
-            self.info(f"resource {resource_id} already exists, patching...")
-            url = self.url + f"resource_patch"
-            return self.ckan_patch(url, datadict)
-        else:
-            self.info(f"Registering new resource '{resource_id}'...")
-            url = self.url + "resource_create"
-            return self.ckan_post(url, datadict)
+        return self.object_create_or_update("resource", data)
 
 
     def check_if_package_exists(self, id):
@@ -263,7 +275,84 @@ class CkanClient(LoggerSuperclass):
         url = self.url + "organization_list"
         return self.ckan_get(url)
 
-    def organization_create(self, group_id:str, name: str, title:str, description="", image_url="", extras=[], update=False):
+    def __get_resources(self, packages: list):
+        """
+        From a list of packages + resources, get only the packages
+        """
+        resources = []
+        for package in packages:
+            if "resources" in package.keys():
+                resources += package["resources"]
+        return resources
+
+    def object_exists(self, obj_type: str, obj: dict) -> (bool, bool):
+        """
+        Checks if an object exists or not and if needs to be updated
+        :param obj_type:
+        :param obj:
+        :return: exists (T/F), needs to be updated (T/F)
+        """
+
+        assert "id" in obj.keys(), f"Object does not have id field!: {json.dumps(obj)}"
+
+        if obj_type in ["package", "resource"]:
+            # Packages are slightly different, they also contain the resources and use different parameters
+            url = self.url + "current_package_list_with_resources"
+            params = {'limit': 10000}  # Adjust as needed
+        else:
+            url = self.url + f"{obj_type}_list"
+            params = {'all_fields': True, "include_extras": True}
+
+        registered = self.ckan_get(url, params)  # get list of registered items
+
+        if isinstance(registered, dict):  # if dict, convert it
+            registered = registered["results"]
+
+        # If we are fetching  resources, we need to get them from inside the packages
+        elif obj_type == "resource":
+            registered = self.__get_resources(registered)
+
+        registered_ids = [r["id"] for r in registered ]
+
+        # Now check if we have an object with the same id
+        if obj["id"] not in registered_ids:
+            return False, False  # object does not exist!
+
+        # Now we know that the object exists, let's figure out if it needs to be updated
+        if updated_required(registered, obj):
+            return True, True  # Object exists and requires an update
+        else:
+            return True, False # Object exists, no update required
+
+    def object_create_or_update(self, obj_type, obj):
+        """
+        Checks if an object exists and if needs to be updated.
+        :param obj_type: CKAN type like organization or group
+        :param obj:
+        :return:
+        """
+        exists, update = self.object_exists(obj_type, obj)
+        obj_id = obj["id"]
+
+        if not exists:
+            self.info(f"CREATE new object      '{obj_type}'  with id='{obj_id}'")
+            url = self.url + obj_type + "_create"
+            return self.ckan_post(url, obj)
+
+        elif exists and update:
+            self.info(f"UPDATE existing object '{obj_type}'  with id='{obj_id}'")
+            url = self.url + obj_type + "_create"
+            return self.ckan_patch(url, obj)
+
+        elif exists and not update:
+            self.info(f"No update required for '{obj_type}'  with id='{obj_id}'")
+            return {}
+
+        else:
+            self.error("This should never happen!", exception=ValueError)
+            return {}
+
+    def organization_create(self, group_id:str, name: str, title:str, description="", image_url="", extras={}):
         """
         Creates a group (project) in CKAN
         +info: https://docs.ckan.org/en/2.9/api/index.html#ckan.logic.action.create.group_create
@@ -284,11 +373,7 @@ class CkanClient(LoggerSuperclass):
             "image_url": image_url,
             "extras": process_extras(extras)
         }
-
-        url = self.url + "organization_create"
-        if update:
-            return self.ckan_patch(url, group_data)
-        return self.ckan_post(url, group_data)
+        self.object_create_or_update("organization", group_data)
 
     # ---------------- GROUPS ---------------- #
     def get_group_list(self):
@@ -307,7 +392,7 @@ class CkanClient(LoggerSuperclass):
         :param title: group's title
         :param description: grop's description (optional)
         :param image_url: group's image (optinal)
-        :param extras: additional key-value pairs
+        :param extras: additional key-value pair    s
         :return:
         """
         group_data = {
@@ -318,18 +403,39 @@ class CkanClient(LoggerSuperclass):
             "image_url": image_url,
             "extras": process_extras(extras)
         }
-
-        url = self.url + "group_create"
-        self.info(f"Creating CKAN group '{name}'")
-        return self.ckan_post(url, group_data)
+        return self.object_create_or_update("group", group_data)
 
     # ---------------- GENERIC METHODS ---------------- #
     def ckan_get(self, url, data={}):
+        """
+        Get a URL from CKAN
+        :param url:
+        :param data:
+        :return:
+        """
+        t = time.time()
+
+        # Create the full URL, including params before sending it
+        full_url = requests.Request('GET', url, params=data ).prepare().url
+
+        if full_url in self.__cache.keys():
+            # We already have the cache in the URL
+            cached_time, cached_value = self.__cache[full_url]
+
+            # Check if the cached value is still relevant, or it has timed out
+            if time.time()  < cached_time + self.__cache_time:
+                return cached_value
+
         headers = {"Authorization": self.api_key, 'Content-Type': "application/x-www-form-urlencoded"}
         resp = requests.get(url, headers=headers, params=data)
         if resp.status_code > 300:
             raise ValueError(f"CKAN HTTP Error code {resp.status_code}, text: {resp.text}")
-        return json.loads(resp.text)["result"]
+
+        # Cache the result
+        cached_time = time.time()
+        value = json.loads(resp.text)["result"]
+        self.__cache[full_url] = (cached_time, value)
+        return value
 
     def ckan_post(self, url, data, file=None):
         headers = {"Authorization": self.api_key}
@@ -342,6 +448,9 @@ class CkanClient(LoggerSuperclass):
 
         resp = requests.post(url, data=data, headers=headers, files=resource)
         if resp.status_code > 300:
+            self.error("ERROR processing the following document:")
+            d = json.loads(data)
+            self.error(json.dumps(d, indent=2))
             self.error(f"{resp.text}", exception=ValueError)
         return json.loads(resp.text)["result"]
 
@@ -358,21 +467,20 @@ class CkanClient(LoggerSuperclass):
         response = json.loads(resp.text)["result"]
         return response
 
-    def resource_patch(self, patch_data: dict, id: str):
-        """
-        Edit attributes within the patch_data dict. The rest remains unchanged
-        :param patch_data: dict with data to pach
-        :param id: package id
-        :return: dataset dict
-        """
-        url = self.url + f"resource_patch"
-        patch_data["id"] = id
-        return self.ckan_post(url, patch_data)
+    # def resource_patch(self, patch_data: dict, id: str):
+    #     """
+    #     Edit attributes within the patch_data dict. The rest remains unchanged
+    #     :param patch_data: dict with data to pach
+    #     :param id: package id
+    #     :return: dataset dict
+    #     """
+    #     url = self.url + f"resource_patch"
+    #     patch_data["id"] = id
+    #     return self.ckan_post(url, patch_data)
 
     def process_mmapi_dataset(self, dataset_conf: dict, resources: list = []) -> list:
         assert_type(dataset_conf, dict)
         assert_types(resources, [list, type(None)])
-
         try:
             r = dataset_conf["export"]["ckan"]["resources"]
         except KeyError:
@@ -393,24 +501,28 @@ class CkanClient(LoggerSuperclass):
 
         # Create a list of resources to be posted to ckan like (resource, link, date_start, date_end)
         # If resource does not have associated dates, just use None)
+        ckan_resources = []
+        self.info("Preparing list of resources to generate...")
         for resource in dataset_resources:
             resource_id = resource["id"]
-            ckan_resources = []
+            # Process dynamically-linked resources hosted in FileServer
             if resource["link"].startswith("$fileserver"):
-                # This is a resource linked to another service
                 fileserver_resource = self.get_linked_resource_conf(dataset_conf, resource["link"])
-                fmt = fileserver_resource["format"]
-                df = self.mc.db.dataframe_from_query(
-                    f"""
+                fileserver_resource_id = fileserver_resource['id']
+                #   fmt = fileserver_resource["format"]
+                query =  f"""
                     select dataset_id, resource_id, data_from, data_to, url, path
                     from {self.mc.dataset_registry_table}
-                    where dataset_id = '{dataset_id}' and resource_id = '{resource_id}'
-                    ; 
-                    """)
+                    where LOWER(dataset_id) = LOWER('{dataset_id}') and LOWER(resource_id) = LOWER('{fileserver_resource_id}'); 
+                """
+                df = self.mc.db.dataframe_from_query(query)
+                if df.empty:
+                    self.warning(f"No datasets found in database for dataset_id={dataset_id} and resource_id={fileserver_resource_id}")
 
                 for _, row in df.iterrows():
                     ckan_resources.append((resource, row["url"], row["data_from"], row["data_to"]))
 
+            # Process HTTPS-based resources
             elif resource["link"].startswith("https"):
                 # This resource is an absolute link to an external resource
                 ckan_resources.append((resource, resource["link"], None, None))
@@ -418,44 +530,48 @@ class CkanClient(LoggerSuperclass):
             else:
                 self.error("Unimplemented resource type, expected HTTPS link or fileserver reference", exception=ValueError)
 
-            # Now create or update all the resources:
-            for resource, link, tstart, tend in ckan_resources:
-                ckan_resource_id = dataset_id + "_" + resource["id"]
-                description = resource["description"]
-                if tstart and tend:
-                    # In case we have multiple files for the same resource, append start and end date
-                    ckan_resource_id += f'_{tstart.strftime("%Y%m%d")}_{tend.strftime("%Y%m%d")}'
-                    description += f'from {tstart.strftime("%Y-%m-%d")} to {tend.strftime("%Y-%m-%d")}'
+        # Now create or update all the resources:
+        for resource, link, tstart, tend in ckan_resources:
 
-                fmt = link.split(".")[-1]
+            self.info(f"===> Processing resource " + CYN + dataset_id + RST +  ":" + WHT + resource['id'] + self.log_colour +  " <=====")
+            ckan_resource_id = dataset_id + "_" + resource["id"]
+            ckan_resource_id = ckan_resource_id.lower()
+            description = resource["description"]
+            if tstart and tend:
+                # In case we have multiple files for the same resource, append start and end date
+                ckan_resource_id += f'_{tstart.strftime("%Y%m%d")}_{tend.strftime("%Y%m%d")}'
+                description += f'from {tstart.strftime("%Y-%m-%d")} to {tend.strftime("%Y-%m-%d")}'
 
-                if fmt.lower() == "nc":
-                    fmt = "NetCDF"
+            fmt = link.split(".")[-1]
 
-                self.resource_create(
-                    ckan_dataset_id,
-                    ckan_resource_id,
-                    description=description,
-                    name=resource["title"],
-                    resource_url=link,
-                    format=fmt
-                )
-                self.generate_dataset_preview(dataset_id, ckan_resource_id, link)
+            if fmt.lower() == "nc":
+                fmt = "NetCDF"
+
+            r = self.resource_create(
+                ckan_dataset_id,
+                ckan_resource_id,
+                description=description,
+                name=resource["title"],
+                resource_url=link,
+                format=fmt
+            )
+            self.info(f"Resource {ckan_resource_id} processed")
+            if r:
+                self.generate_resource_view(dataset_id, ckan_resource_id, link)
         return []
 
-    def generate_dataset_preview(self, dataset_id: str, resource_id: str, resource_url: str,
-                                 path="/opt/files/other/dataset_views"):
-
+    def generate_resource_view(self, dataset_id: str, resource_id: str, resource_url: str,
+                               path="/opt/files/other/dataset_views"):
         assert_type(dataset_id, str)
         assert_type(resource_id, str)
         assert_type(resource_url, str)
         assert_type(path, str)
 
-        self.info(f"Registering dataset view for {dataset_id}")
+        self.info(f"Registering dataset view for {dataset_id} {resource_id}")
         filename = "./" + resource_url.split("/")[-1]
         extension = filename.lower().split(".")[-1]
         resource_view_file = filename.lower().replace(extension, "jpeg")
-        implemented_extensions = ["tif", "csv", "nc"]
+        implemented_extensions = ["tif", "csv", "nc", "zip"]
 
         if extension not in implemented_extensions:
             self.warning(f"Generate Resource View not implemented for extension {extension}")
@@ -463,68 +579,59 @@ class CkanClient(LoggerSuperclass):
 
         download_file(resource_url, filename)
         if extension == "tif":
-            self.info("Converting tif to jpeg...")
+            self.debug("Converting tif to jpeg...")
             tif_image = Image.open(filename)
             rgb_image = tif_image.convert("RGB")
 
-        elif extension in ["csv", "nc"]:
-            dataset_plot = auto_plotter(filename, dataset_id)
+        elif extension in ["csv", "nc", "zip"]:
+            dataset = self.mc.get_document("datasets", dataset_id)
+            try:
+                dataset_plot = auto_plotter(filename, resource_id, dataset)
+            except Exception as e:
+                self.error(str(e))
+                self.error(f"Can't create resource view for {dataset_id}:{resource_id}")
+                return
             rgb_image = Image.open(dataset_plot).convert("RGB")
 
         else:
             self.error("This should never happen! Check implemented_extensions and if conditions", exception=ValueError)
-
+        os.remove(filename)
         rgb_image = resize_pic(rgb_image)
         rgb_image.save(resource_view_file, "JPEG")
-
         view_url = self.fileserver.send_file(self.fileserver.basepath + f"/other/ckan_views/{dataset_id}/{resource_id}",
                                              resource_view_file)
+        os.remove(resource_view_file)
 
-        self.info(f"View created at {view_url}")
-        self.info(f"Posting {view_url} as resource view")
+        # Now check if we need to register the new view in CKAN. We only need to do it once, since the view png file
+        # will be overwritten in the fileserver
 
         # resource_id (string) – id of the resource
         # title (string) – the title of the view
         # description (string) – a description of the view (optional)
         # view_type (string) – type of view
         # config (JSON string) – options necessary to recreate a view state (optional)
-
-        self.create_resource_view(
-            resource_id,
-            f"{dataset_id}-{resource_id}",
-            f"JPEG view for {dataset_id} {resource_id}",
-            view_url
-        )
-
-        os.remove(resource_view_file)
+        current_views = self.ckan_get(self.url + "resource_view_list", data={'id': resource_id})
+        if len(current_views):
+            self.info("View already existing in CKAN, no need to insert it...")
+        else:
+            self.info("Creating new view")
+            self.create_resource_view(
+                resource_id,
+                f"{dataset_id}-{resource_id}",
+                f"JPEG view for {dataset_id} {resource_id}",
+                view_url
+            )
 
     def create_resource_view(self, resource_id, title, description, image_url, view_type="image_view"):
-        d = {
+        data = {
             "resource_id": resource_id,
             "title": title,
             "description": description,
-            "view_type": "image_view",
+            "view_type": view_type,
             "image_url": image_url
         }
-
-        # Get existing view for this resource
-
-        resp = self.ckan_get(self.url + "resource_view_list", {"id": resource_id})
-        action = "post"
-        for view in resp:
-            if view["title"] == title:
-                d["id"] = view["id"]
-                action = "patch"
-                break
-
-        if action == "post":
-            # Create a new view
-            self.ckan_post(self.url + "resource_view_create", d)
-
-        elif action == "patch":
-            # Patch the view!
-            self.ckan_patch(self.url + "resource_view_update", d)
-
+        url = self.url + "resource_view_create"
+        return self.ckan_post(url, data)
 
     def get_linked_resource_conf(self, dataset_conf: dict, link: str):
         """

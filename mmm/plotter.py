@@ -7,6 +7,9 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 27/10/23
 """
+import os
+from os.path import exists
+
 import rich
 import yaml
 import math
@@ -19,6 +22,10 @@ import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
 import emso_metadata_harmonizer as emh
 import numpy as np
+import zipfile
+import random
+from PIL import Image
+
 
 qc_flags = {
     "good": 1,
@@ -43,14 +50,12 @@ __qc_sizes = {
     "missing": 4
 }
 
-def plot_trajectory(df, dataset_id):
+def plot_trajectory(df, dataset):
     # Example DataFrame with latitude and longitude
     data = {
         "latitude": df["LATITUDE"],
         "longitude": df["LONGITUDE"],
     }
-    df = pd.DataFrame(data)
-
     # Example DataFrame with latitude and longitude
 
     df = pd.DataFrame(data)
@@ -60,6 +65,7 @@ def plot_trajectory(df, dataset_id):
     ax = plt.axes(projection=ccrs.PlateCarree())  # Use PlateCarree for simple lat/lon projections
     # ax.set_extent([-130, -70, 20, 50], crs=ccrs.PlateCarree())  # Adjust extent to show relevant region
 
+
     # Add features to the map
     ax.add_feature(cfeature.COASTLINE, linewidth=1)
     ax.add_feature(cfeature.BORDERS, linestyle=':')
@@ -67,13 +73,31 @@ def plot_trajectory(df, dataset_id):
     ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgray')
     ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
 
+
+    station_id = dataset["@stations"]
+    ax.set_title(dataset["title"], fontsize=16)
+
     # Plot the trajectory
     ax.plot(df['longitude'], df['latitude'], color='blue', marker='.', transform=ccrs.PlateCarree(),
-            label=f'trajectory')
+            label=f'{station_id} trajectory')
 
     # Add labels
-    # ax.set_title('Trajectory Map', fontsize=16)
+
+    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+    gl.top_labels = False  # Disable labels on top
+    gl.right_labels = False  # Disable labels on right
+    gl.xlabel_style = {'size': 10}
+    gl.ylabel_style = {'size': 10}
     ax.legend()
+    # lat_margin = abs(10000*(df["longitude"].max() - df["longitude"].min()))
+    # lon_margin = abs(10000 * (df["longitude"].max() - df["longitude"].min()))
+    # ax.set_xlim(df["longitude"].min() - lon_margin, df["longitude"].max() + lon_margin)
+    # ax.set_ylim(df["latitude"].min() - lat_margin, df["latitude"].max() + lat_margin)
+    # ax.set_xlim(df["longitude"].min(), df["longitude"].max())
+    # ax.set_ylim(df["latitude"].min(), df["latitude"].max())
+
+    plt.tight_layout()
+    return plt
 
 
 def plot_timeseries(df):
@@ -127,6 +151,7 @@ def plot_timeseries(df):
 
     # Adjust layout
     plt.tight_layout()
+    return plt
 
 
 def open_data_file(filename):
@@ -140,27 +165,76 @@ def open_data_file(filename):
         df = df.set_index("TIME")
     return df
 
-def auto_plotter(filename, dataset_id):
+def auto_plotter(filename: str, resource_id: str, dataset: dict):
     """
     creates an automatic plot with the data inside the filename
-    :param filename:
-    :return:
     """
+    plot_filename = dataset["#id"] + "_" + resource_id + ".png"
+
+    if filename.endswith(".zip"):
+        return mosaic_from_zip(filename, plot_filename)
+
     df = open_data_file(filename)
     if "LATITUDE" in df.columns and "LONGITUDE" in df.columns:  # make sure that we have lat and lon
         if len(np.unique(df["LATITUDE"].values)) > 1 or len(np.unique(df["LONGITUDE"].values)) > 1:
             # this is a trajectory!
-            plot_trajectory(df, dataset_id)
+            plt = plot_trajectory(df, dataset)
         else:
             # fixed-point timeseries
-            plot_timeseries(df)
+            plt = plot_timeseries(df)
     else:
-        plot_timeseries(df)
+        plt = plot_timeseries(df)
 
-    splits = filename.split(".")
-    new_filename = ".".join(splits) + ".png"
-    print(new_filename)
-    plt.savefig(new_filename)
-    return new_filename
+    plt.savefig(plot_filename, dpi=300)
+    return plot_filename
 
 
+
+def mosaic_from_zip(filename, mosaic_filename):
+    # Extract all contents to a directory
+    folder = ".delete_me"
+    os.makedirs(folder, exist_ok=True)
+    with zipfile.ZipFile(filename, 'r') as zip_ref:
+        files = zip_ref.namelist()
+        pictures = [f for f in files if f.split(".")[-1].lower() in ["jpeg", "jpg", "png"]]
+        if len(pictures) < 4:
+            raise ValueError(f"Cannot create mosaic from zip file with {len(pictures)} pictures inside!")
+        # Select 4 random pictures
+        pictures = random.sample(pictures, 4)
+
+        for pic in pictures:
+            zip_ref.extract(pic, folder)
+
+        pictures = [os.path.join(folder, p) for p in pictures]
+
+    # Now create a mosaic 4x4 mosaic with the size of the first selected picture
+
+    # Resize images to fit within a box while preserving aspect ratio
+    img1, img2, img3, img4 = [Image.open(p) for p in pictures]
+
+    w = int(img1.width / 4)
+    h = int(img1.height / 4)
+    max_size = (w, h)
+
+    img1.thumbnail(max_size, Image.Resampling.LANCZOS)
+    img2.thumbnail(max_size, Image.Resampling.LANCZOS)
+    img3.thumbnail(max_size, Image.Resampling.LANCZOS)
+    img4.thumbnail(max_size, Image.Resampling.LANCZOS)
+
+    # Create a new blank image for the mosaic
+    mosaic = Image.new('RGB', (2*w + 10, 2*h + 10), 'white')
+
+    # Paste images centered in each quadrant
+    def paste_centered(mosaic, img, x_offset, y_offset, x_size, y_size):
+        # Calculate position to center the image
+        x = x_offset + (x_size - img.width) // 2
+        y = y_offset + (y_size - img.height) // 2
+        mosaic.paste(img, (x, y))
+
+    paste_centered(mosaic, img1, 0, 0, w+10, h+10)  # Top-left
+    paste_centered(mosaic, img2, w+10, 0, w+10, h+10)  # Top-right
+    paste_centered(mosaic, img3, 0, h+10, w+10, h+10)  # Bottom-left
+    paste_centered(mosaic, img4, w+10, h+10, w+10, h+10)  # Bottom-right
+
+    mosaic.save(mosaic_filename)
+    return mosaic_filename

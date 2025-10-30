@@ -163,7 +163,7 @@ class LoggerSuperclass:
         self.logger = logger
         if not logger:
             self.logger = logging  # if not assign the generic module
-        self.__log_colour = colour
+        self.log_colour = colour
 
     def warning(self, *args):
         mystr = YEL + "[%s] " % self.logger_name + str(*args) + RST
@@ -180,11 +180,11 @@ class LoggerSuperclass:
 
 
     def debug(self, *args):
-        mystr = self.__log_colour + "[%s] " % self.logger_name + str(*args) + RST
+        mystr = self.log_colour + "[%s] " % self.logger_name + str(*args) + RST
         self.logger.debug(mystr)
 
     def info(self, *args):
-        mystr = self.__log_colour + "[%s] " % self.logger_name + str(*args) + RST
+        mystr = self.log_colour + "[%s] " % self.logger_name + str(*args) + RST
         self.logger.info(mystr)
 
     def setLevel(self, level):

@@ -843,9 +843,9 @@ class MetadataCollector(LoggerSuperclass):
         }
         for dep in hist:
             data["time"].append(dep["time"])
-            data["latitude"].append(dep["where"]["position"]["latitude"])
-            data["longitude"].append(dep["where"]["position"]["longitude"])
-            data["depth"].append(dep["where"]["position"]["depth"])
+            data["latitude"].append(round(dep["where"]["position"]["latitude"], 6))
+            data["longitude"].append(round(dep["where"]["position"]["longitude"], 6))
+            data["depth"].append(round(dep["where"]["position"]["depth"], 2))
 
         self.debug(f"Creating dataframe with deployments")
         df = pd.DataFrame(data)
@@ -1152,34 +1152,17 @@ class MetadataCollector(LoggerSuperclass):
         history = sorted(history, key=lambda x: x['time'])
         return history
 
-    def dataset_resource_create(self, resource_id, dataset_id, tstart: str, tend: str, url, path):
-        assert_type(resource_id, str)
-        assert_type(dataset_id, str)
-        assert_type(tstart, str)
-        assert_type(tend, str)
-        assert_type(path, str)
-        assert_type(url, str)
-
-        now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        query = f"""        
-            INSERT INTO {self.dataset_registry_table} (
-                resource_id, dataset_id, data_from, data_to, creation_date, modification_date, url, path
-            ) 
-            VALUES (
-                '{resource_id}', 
-                '{dataset_id}', 
-                '{tstart}', 
-                '{tend}',
-                '{now}',
-                '{now}',
-                '{url}',
-                '{path}'
-            );
+    def dataset_register(self, resource_id, dataset_id, tstart: str, tend: str, url, path):
         """
-        self.db.exec_query(query, fetch=False)
-
-    def dataset_resource_update(self, resource_id, dataset_id, tstart: str, tend: str, url, path):
+        Register a dataset into the fileserver_dataset_registry. If no entry exists insert it, otherwise update it
+        :param resource_id:
+        :param dataset_id:
+        :param tstart:
+        :param tend:
+        :param url:
+        :param path:
+        :return:
+        """
         assert_type(resource_id, str)
         assert_type(dataset_id, str)
         assert_type(tstart, str)
@@ -1188,17 +1171,32 @@ class MetadataCollector(LoggerSuperclass):
         assert_type(url, str)
 
         now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = f"""
+            SELECT EXISTS(
+                SELECT 1 FROM {self.dataset_registry_table} 
+                WHERE
+                dataset_id='{dataset_id}' and resource_id='{resource_id}' and data_from='{tstart}' and data_to='{tend}'
+            );"""
+        table_entry_exists = self.db.value_from_query(query)
+        # We did not update anything in the table! This means that we need to insert it
+        if not table_entry_exists:  # Create new registry
+            self.info(f"CREATE dataset registry for dataset_id='{dataset_id}' and resource_id='{resource_id}'")
+            query = f"""
+                INSERT INTO {self.dataset_registry_table} 
+                (resource_id, dataset_id, data_from, data_to, creation_date, modification_date, url, path) 
+                VALUES ('{resource_id}', '{dataset_id}', '{tstart}', '{tend}', '{now}', '{now}', '{url}', '{path}');
+                """
+            self.db.exec_query(query, fetch=False)
 
-        query = f"""        
-            UPDATE {self.dataset_registry_table}
-            SET
-                modification_date = '{now}',
-                path = '{path}',
-                url = '{url}'
-            WHERE
-                resource_id = '{resource_id}'
-        ;"""
-        self.db.exec_query(query, fetch=False)
+        else:  # update existing entry
+            self.info(f"UPDATE dataset registry for dataset_id='{dataset_id}' and resource_id='{resource_id}'")
+            query = f"""        
+                UPDATE {self.dataset_registry_table}
+                SET modification_date = '{now}', path = '{path}',  url = '{url}' 
+                WHERE
+                 dataset_id='{dataset_id}' and resource_id='{resource_id}' and data_from='{tstart}' and data_to='{tend}'
+            ;"""
+            self.db.exec_query(query, fetch=False)
 
     def dataset_resource_exists(self, resource_id) -> bool:
         query = f"select url from fileserver_dataset_registry where resource_id = '{resource_id}';"

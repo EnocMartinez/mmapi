@@ -324,7 +324,7 @@ class ActivitySelector(LoggerSuperclass):
         return self.values
 
     def edit(self, event):
-        ActivitySelectorEditor(self, "ActivitySelectorEditor")
+        ActivitySelectorEditor(self, "ActivitySelectorEditor", "activities")
         pass
 
 
@@ -371,13 +371,10 @@ class ActivitySelectorEditor(LoggerSuperclass):
 
         self.available_list = MultiColumnListbox(self.root, self.parent.headers, [], row=1, column=2, columnspan=1)
 
-
-
         filter_frame = tk.Frame(self.root)
         filter_frame.grid(column=2, row=2)
         self.filter_text = TextField(filter_frame, "filter", 0, validation=False)
         self.filter_text.entry.bind("<Key>", self.filter_updated_callback)  # Handle selection
-
 
         btn = tk.Button(self.root, text="Done")
         btn.grid(column=0, row=5,  sticky="nsew")
@@ -455,8 +452,6 @@ class MultiColumnListbox(object):
         self.tree.grid(column=1, row=1, sticky='nsew', in_=container)
         vsb.grid(column=2, row=1, sticky='ns', in_=container)
         hsb.grid(column=1, row=2, sticky='ew', in_=container)
-        # container.grid_columnconfigure(1, weight=1)
-        # container.grid_rowconfigure(1, weight=1)
 
         for col in self.headers:
             self.tree.heading(col, text=col.title(), command=lambda c=col: sorty_by(self.tree, c, 0))
@@ -470,15 +465,10 @@ class MultiColumnListbox(object):
         self.elements = elements
         self.values = values
         self._build_tree()
-        rich.print(f"[cyan]_build_tree took {1000*(time.time() - t) :.031} msecs")
 
     def _build_tree(self):
         #self.tree.delete(*self.tree.get_children())  # delete current
         current_identifiers = self.tree.get_children()
-        # for col in self.headers:
-        #     self.tree.heading(col, text=col.title(), command=lambda c=col: sorty_by(self.tree, c, 0))
-        #     # adjust the column's width to the header string
-        #     self.tree.column(col, width=tkFont.Font().measure(col.title()))
 
         for item, identifier in zip(self.elements, self.values):
             # Add new elements
@@ -505,10 +495,8 @@ class MultiColumnListbox(object):
 def sorty_by(tree, col, descending):
     """sort tree contents when a column header is clicked on"""
     # grab values to sort
-    data = [(tree.set(child, col), child) \
-            for child in tree.get_children('')]
+    data = [(tree.set(child, col), child) for child in tree.get_children('')]
     # if the data to be sorted is numeric change to float
-    # data =  change_numeric(data)
     # now sort the data in place
     data.sort(reverse=descending)
     for ix, item in enumerate(data):

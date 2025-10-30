@@ -32,12 +32,13 @@ if __name__ == "__main__":
     else:
         collections = args.collections
 
-    mc = init_metadata_collector(secrets)
+    log = setup_log("Meta2Ckan")
+
+    mc = init_metadata_collector(secrets, log=log)
 
     proj = secrets["ckan"]["project_logos"]
     org = secrets["ckan"]["organization_logos"]
-    log = setup_log("Meta2Ckan")
 
     fileserver = FileServer(secrets["fileserver"], log)
     ckan = CkanClient(mc, secrets["ckan"]["url"], secrets["ckan"]["api_key"], fileserver, log)
-    propagate_metadata_to_ckan(mc, ckan, collections, datasets=args.datasets)
+    propagate_metadata_to_ckan(mc, ckan, log, collections=collections, datasets=args.datasets)

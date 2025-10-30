@@ -111,7 +111,7 @@ class DatasetObject(LoggerSuperclass):
     def tend_str(self, fmt="%Y-%m-%dT%H:%M:%SZ"):
         return self.tend.strftime(fmt)
 
-    def deliver(self, overwrite=False):
+    def deliver_and_register(self, register=True):
         """
         Delivers a dataset to the export service as configured in __init__
         :param fileserver: FileServer to convert from filesystem tu public HTTP URL. If no URL is needed, leave it blank
@@ -125,16 +125,9 @@ class DatasetObject(LoggerSuperclass):
         else:
             self.url = self.fileserver.path2url(self.filename)
 
-        if self.service_name == "fileserver":
+        if register:
             path = self.fileserver.url2path(self.url)
-            if self.mc.dataset_resource_exists(self.resource_id) and overwrite:
-                self.info(f"Overwriting existing dataset resource with new one: {self.resource_id} ")
-                self.mc.dataset_resource_update(self.resource_id, self.dataset_id, self.tstart_str(),
-                                            self.tend_str(), self.url, path)
-            else:
-                self.info(f"Creating new dataset resource: {self.resource_id} ")
-                self.mc.dataset_resource_create(self.resource_id, self.dataset_id, self.tstart_str(),
-                                                self.tend_str(), self.url, path)
+            self.mc.dataset_register(self.resource_id, self.dataset_id, self.tstart_str(), self.tend_str(), self.url, path)
 
         return self.url
 

@@ -173,7 +173,8 @@ __operation_type__ = [
 __project_types__ = [
     "european",  # Project funded by the European Comission
     "national",  # Project funded by the national science ministry (or similar)
-    "contract"  # Project with a company, EU or national project regulations do not apply
+    "contract",  # Project with a company, EU or national project regulations do not apply
+    "other"
 ]
 
 __partnership_types__ = ["coordinator", "participant", "thirdParty", "other", "associatedPartner"]
@@ -328,6 +329,7 @@ ckan_resource = {
         "description": {"type": "string", "definition": "description name of the resource"},
         "link": {"type": "string",
                 "definition": "URL of the resource, if set to $fileserver the last resource uploaded to fileserver will be used"},
+        "tags": __string_list__ # array of tags to be added to the ckan dataset
     },
     "required": ["id", "title", "description", "link"]
 }
@@ -588,7 +590,6 @@ __resources = {
         "name": {"type": "string"},
         "description": {"type": "string"},
         "type": {"type": "string", "enum": __resource_type},
-        "parameters": {"type": "object"}
     },
     "required": ["name", "description", "type"]
 }

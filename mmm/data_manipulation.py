@@ -37,7 +37,9 @@ def open_csv(csv_file, time_format="", time_range=[], format=False) -> pd.DataFr
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         time_formats = [
             "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S.%f%z",
             "%Y-%m-%dT%H:%M:%Sz",
+            "%Y-%m-%dT%H:%M:%S.%fz",
             "%Y-%m-%d %H:%M:%S",
             "%Y/%m/%d %H:%M:%S",
             "%d/%m/%Y %H:%M:%S"
@@ -49,7 +51,7 @@ def open_csv(csv_file, time_format="", time_range=[], format=False) -> pd.DataFr
                 opened = True
                 break
             except ValueError:
-                rich.print(f"[yellow]Could not parse time with format '{time_format}'")
+                rich.print(f"[yellow]Could not parse time with format '{fmt}'")
                 continue
 
         if not opened:

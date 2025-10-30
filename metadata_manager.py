@@ -60,6 +60,7 @@ def load_from_filesystem(folder, subset=[], history=False):
         if subset and collection_name not in subset:
             continue
         files = [os.path.join(folder, file) for file in os.listdir(folder)]
+        files = sorted(files)
         fs_data[collection_name] = {}
         for file in files:
             with open(file) as f:

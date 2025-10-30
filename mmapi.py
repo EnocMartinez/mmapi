@@ -111,8 +111,8 @@ def post_to_validate(collection: str):
     try:
         app.mc.validate_document(document, collection, exception=True, metadata=False)
     except Exception as e:
-        return Response({"success": False}, status=200, mimetype="application/json")
-
+        payload = {"success": False, "message": str(e)}
+        return Response(json.dumps(payload), status=200, mimetype="application/json")
     return Response({"success": True}, status=200, mimetype="application/json")
 
 

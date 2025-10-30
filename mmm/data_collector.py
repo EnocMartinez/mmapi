@@ -11,7 +11,6 @@ created: 30/11/22
 import datetime
 import logging
 import json
-from csv import excel_tab
 
 import emso_metadata_harmonizer.metadata
 import numpy as np
@@ -21,7 +20,7 @@ import rich
 from .darwin_core import DarwinCoreArchive
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
-from .common import run_subprocess, check_url, run_over_ssh, LoggerSuperclass, assert_types, \
+from .common import run_subprocess, check_url, run_over_ssh, LoggerSuperclass, assert_types, GRN, RST, \
     assert_type
 from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals
 from .metadata_collector import MetadataCollector, init_metadata_collector
@@ -240,7 +239,7 @@ class DataCollector(LoggerSuperclass):
         else:
             conf = dataset
         dataset_id = conf["#id"]
-        self.info(f"=====> Creating dataset {dataset_id} from {time_start} to {time_end} <=====")
+        self.info(f"=====> Creating dataset {GRN}{dataset_id} {RST}from {time_start} to {time_end} <=====")
 
         assert service_name in conf["export"].keys(), f"Dataset {dataset_id} doesn't have export configuration for service '{service_name}'"
 
@@ -286,14 +285,14 @@ class DataCollector(LoggerSuperclass):
             raise ValueError(f"Time start={time_start} greater than time end={time_end}")
         datasets = []
 
-        self.info(f"Creating resource for service {service_name} and dataset {dataset_id}")
+        self.info(f"Creating resource for service {GRN}{service_name}{RST} and dataset {GRN}{dataset_id}{RST}")
         for resource in conf["export"][service_name]["resources"]:
-            resrouce_id = resource["id"]
-            if resources and  resrouce_id not in resources:
-                self.warning(f"Ignoring resource {resrouce_id}")
+            resource_id = resource["id"]
+            if resources and  resource_id not in resources:
+                self.warning(f"Ignoring resource {resource_id}")
                 continue
             else:
-                self.info(f"Keeping resource {resrouce_id}")
+                self.info(f"Keeping resource {resource_id}")
 
             if resource["period"] == "none":
                 d = self.generate_dataset_file(conf, service_name, resource, time_start, time_end, fmt=fmt, overwrite=overwrite)
@@ -303,14 +302,19 @@ class DataCollector(LoggerSuperclass):
                 ds = self.generate_dataset_tree(conf, service_name, resource, time_start=time_start, time_end=time_end, fmt=fmt, overwrite=overwrite)
                 datasets += ds
 
+        register = False
+        if service_name == "fileserver":
+            register = True  # Only store reg
+
         if deliver:
-            self.info("Delivering dataset objects...")
             for dataset in datasets:
                 if dataset:
-                    dataset.deliver(overwrite=overwrite)
+                    # Deliver and register dataset in fileserver_datasets_registry
+                    dataset.deliver_and_register(register=register)
         else:
             for dataset in datasets:
                 self.info(f"Local file stored in {dataset.filename}")
+                self.warning(f"Not registering in metadata database datasets in fileserver_dataset_registry!")
 
         if service_name == "erddap" and erddap_config:
             self.info("Trying to autoconfigure ERDDAP dataset (using last dataset)")
@@ -443,7 +447,6 @@ class DataCollector(LoggerSuperclass):
 
     def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, resource: dict, time_start: pd.Timestamp,
                            time_end: pd.Timestamp) -> pd.DataFrame:
-        rich.print(resource)
         data_type = resource["dataType"]
         if data_type == "timeseries":
             return self.dataframe_from_sta_timeseries(conf, resource, station, sensor, time_start, time_end)
@@ -992,12 +995,27 @@ class DataCollector(LoggerSuperclass):
         filename = self.dataset_filename(conf, "csv", time_start, time_end)
         station = self.mc.get_document("stations", conf["@stations"])
         dataframes = []  # list with a dataframe per variable
+        data_type = resource["dataType"]
+
         for sensor_name in conf["@sensors"]:
             sensor = self.mc.get_document("sensors", sensor_name)
-            df = self.dataframe_from_sta(conf, station, sensor, resource, time_start, time_end)
-            if df.empty:
-                self.warning(f"No data for sensor={sensor_name}  between {time_start} and {time_end}")
+
+            # Check if this sensor has any datastream with the assigned type
+            q = f"""
+                select count(*) from "DATASTREAMS" 
+                where "SENSOR_ID" = (select "ID" from "SENSORS" where "NAME" = '{sensor_name}') 
+                and "PROPERTIES"->>'dataType' = '{data_type}'; 
+            """
+            if self.sta.value_from_query(q) < 1:
+                self.info(f"No data for type {data_type} for sensor {sensor_name}")
                 continue
+
+            df = self.dataframe_from_sta(conf, station, sensor, resource, time_start, time_end)
+
+            if df.empty:
+                self.error(f"No data for sensor={sensor_name}  between {time_start} and {time_end}")
+                continue
+
             if len(conf["@sensors"]) > 1:
                 df["SENSOR_ID"] = sensor_name
             dataframes.append(df)
@@ -1037,6 +1055,7 @@ class DataCollector(LoggerSuperclass):
         self.info(f"Creating ZIP dataset, ID: {conf['#id']}, from {time_start} to {time_end}")
 
         dataset_id = conf["#id"]
+        resource_id = resource["id"]
         tmp_folder = f"/var/tmp/{datetime.datetime.now().strftime('%s')}/{dataset_id}"
         remote_filename = self.dataset_filename(conf, "zip", time_start, time_end,
                                                 tmp_folder="/var/tmp")
@@ -1047,15 +1066,10 @@ class DataCollector(LoggerSuperclass):
                 self.warning(f"Overwriting previous dataset {remote_filename}")
             else:
                 self.warning(f"File {remote_filename} already exists and available online!")
-                return ""
+                return "", False
 
         # First step, get all files indexed in the SensorThings database
         datastream_ids = []
-        #for sensor in conf["@sensors"]:
-        # if len(conf["@sensors"])!=1:
-        #     raise ValueError("ZIP dataset with multiple sensors not supported")
-
-        file_mapping = {}  # key=path in filesystem, value=path in zip file
 
         for sensor in conf["@sensors"]:
             sensor_id = self.sta.sensor_id_name[sensor]
@@ -1077,6 +1091,7 @@ class DataCollector(LoggerSuperclass):
             raise ValueError(f"No valid Datastreams found for sensors={conf['@sensors']} with dataType=files")
 
         # Now let's query for all registered files in the database matching the datastreams
+        self.warning("LIMITING NUMBER OF FILES TO ONLY 100!!!")
         df = self.sta.dataframe_from_query(f'''
          select 
             "OBSERVATIONS"."PHENOMENON_TIME_START" as time,
@@ -1088,10 +1103,15 @@ class DataCollector(LoggerSuperclass):
             "DATASTREAM_ID" IN ({', '.join(datastream_ids)}) and
             "OBSERVATIONS"."DATASTREAM_ID" = "DATASTREAMS"."ID" and
             "SENSORS"."ID" = "DATASTREAMS"."SENSOR_ID" and
-            "OBSERVATIONS"."PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
+            "OBSERVATIONS"."PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\'        
+        limit 100
+        ;
         ''', debug=False)
 
-            # Now we will do the following:
+        if df.empty:
+            self.error(f"could not generate dataset {dataset_id}:{resource_id}", exception=ValueError)
+
+        # Now we will do the following:
         # 1. Create a temporal folder in /var/temp/<epochtime>
         # 2. Create one folder per sensor:
         #     /var/temp/<epochtime>/<sensor1>
@@ -1103,8 +1123,6 @@ class DataCollector(LoggerSuperclass):
         #    3.3 compress to zip
         #    3.3 send the zip file to its destination
         #    3.4 delete temporal files
-
-
 
         files = list(df["urls"])  # List of all files to be compressed
 
@@ -1171,6 +1189,15 @@ class DataCollector(LoggerSuperclass):
         # Run the script!
         run_over_ssh(self.fileserver.host, script_dest + "/" + script_name, fail_exit=True)
 
+        # Check if the size is coherent
+        a = run_over_ssh(self.fileserver.host, f"ls -l {remote_filename}")
+        size = int(a.split(" ")[4]) # size is column 5 of ls -l command
+        if size < 3000:
+
+            self.warning(f"first url: {df['urls'].values[0]}")
+            self.warning(f"last  url: {df['urls'].values[-1]}")
+            self.error("ZIP file looks empty! less than 3k means there's nothing inside", exception=ValueError)
+
 
         # At this point the file should be created
         # if the destination and the fileserver are the same (very likely), just copy from temp folder to the definitive
@@ -1179,11 +1206,11 @@ class DataCollector(LoggerSuperclass):
             dest = resource["path"]
             src = remote_filename
             self.info(f"Moving inside fileserver from {src} to {dest}")
-            rich.print(f"mv {src} {dest}")
             filename = os.path.join(dest, os.path.basename(src))
             run_over_ssh(self.fileserver.host, f"mkdir -p {os.path.dirname(filename)}")
             run_over_ssh(self.fileserver.host, f"mv {src} {filename}")
             delivered = True
+
         else:
             # Download to this machine
             self.error("Not implemented!!", exception=ValueError)

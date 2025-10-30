@@ -293,8 +293,15 @@ class DocumentManager(LoggerSuperclass):
         doc = purge_empty_fields(doc)
 
         self.info("Validating document...")
-        if self.api.validate_doc(self.schema_name, doc):
-            self.val_btn.config(text="Validate ✓")
+        rich.print(f"[RED]DELETING TIME FIELD TO MAKE EVERYTHING FAIL!")
+        del doc["time"]
+        success, msg = self.api.validate_doc(self.schema_name, doc)
+        if success:
+            self.val_btn.config(text="Validate ✓", fg="green")
+        else:
+            self.val_btn.config(text="Validate x", fg="red")
+            rich.print(f"[red]{msg}")
+
 
         rich.print(doc)
 
@@ -302,6 +309,7 @@ class DocumentManager(LoggerSuperclass):
         doc = self.meta.get()  # get the metadata
         doc.update(self.data.get()) # add the data
         doc = purge_empty_fields(doc)
+        rich.print(doc)
 
     def delete_btn_callback(self, event):
         pass
