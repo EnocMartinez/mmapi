@@ -1091,7 +1091,6 @@ class DataCollector(LoggerSuperclass):
             raise ValueError(f"No valid Datastreams found for sensors={conf['@sensors']} with dataType=files")
 
         # Now let's query for all registered files in the database matching the datastreams
-        self.warning("LIMITING NUMBER OF FILES TO ONLY 100!!!")
         df = self.sta.dataframe_from_query(f'''
          select 
             "OBSERVATIONS"."PHENOMENON_TIME_START" as time,
@@ -1103,8 +1102,7 @@ class DataCollector(LoggerSuperclass):
             "DATASTREAM_ID" IN ({', '.join(datastream_ids)}) and
             "OBSERVATIONS"."DATASTREAM_ID" = "DATASTREAMS"."ID" and
             "SENSORS"."ID" = "DATASTREAMS"."SENSOR_ID" and
-            "OBSERVATIONS"."PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\'        
-        limit 100
+            "OBSERVATIONS"."PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\'                
         ;
         ''', debug=False)
 
