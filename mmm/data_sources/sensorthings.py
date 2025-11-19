@@ -304,7 +304,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             rm_remote_files(self.host, files)
 
     def inject_to_detections(self, df, max_rows=100000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data",
-                             tmp_folder_db="/tmp/sta_db_copy/data"):
+                             tmp_folder_db="/tmp/sta_db_copy/data", usecs=False):
         """
         Inject all data in df into the timeseries table via SQL copy
         """
@@ -316,7 +316,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows)
         dataframes = slice_dataframes(df, max_rows=rows)
-        files = self.dataframes_to_detections_csv(dataframes, tmp_folder)
+        files = self.dataframes_to_detections_csv(dataframes, tmp_folder, usecs=usecs)
         rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
 
         if self.host != "localhost" and self.host != "127.0.0.1":
@@ -396,7 +396,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         self.update_observations_id_seq()
 
     def inject_to_json(self, df, max_rows=10000, tmp_folder="/tmp/sta_db_copy/data",
-                            tmp_folder_db="/tmp/sta_db_copy/data"):
+                            tmp_folder_db="/tmp/sta_db_copy/data", usecs=False):
         """
         Inject all data in df into the timeseries table via SQL copy
         """
@@ -408,7 +408,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows)
         dataframes = slice_dataframes(df, max_rows=rows)
-        files = self.dataframes_to_json_csv(dataframes, tmp_folder)
+        files = self.dataframes_to_json_csv(dataframes, tmp_folder, usecs=usecs)
         rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
 
         if self.host != "localhost" and self.host != "127.0.0.1":
@@ -520,7 +520,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 files.append(file)
         return files
 
-    def dataframes_to_detections_csv(self, dataframes: list, folder: str):
+    def dataframes_to_detections_csv(self, dataframes: list, folder: str, usecs=False):
         """
         Write dataframes into local csv files ready for sql copy following the syntax in table OBSERVATIONS
         """
@@ -533,7 +533,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 file = os.path.join(folder, f"timeseries_copy_{i:04d}.csv")
                 i += 1
                 rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
-                self.format_detections_csv(dataframe, file)
+                self.format_detections_csv(dataframe, file, usecs=usecs)
                 files.append(file)
         return files
 
@@ -551,7 +551,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 files.append(file)
         return files
 
-    def dataframes_to_json_csv(self, dataframes: list, folder):
+    def dataframes_to_json_csv(self, dataframes: list, folder, usecs=False):
         i = 0
         files = []
         with Progress() as progress:
@@ -561,7 +561,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 file = os.path.join(folder, f"files_copy_{i:04d}.csv")
                 i += 1
                 rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
-                self.format_json_csv(dataframe, file)
+                self.format_json_csv(dataframe, file, usecs=usecs)
                 files.append(file)
         return files
 
@@ -776,7 +776,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         del df_final
         gc.collect()
 
-    def format_detections_csv(self, df_in, filename):
+    def format_detections_csv(self, df_in, filename, usecs=False):
         """
         Format from a regular dataframe to a Dataframe ready to be copied into a TimescaleDB simple table
         :param df_in:
@@ -788,7 +788,12 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         df["timestamp"] = df.index.values
         df = df[["timestamp", "value", "datastream_id"]]
         df = df.dropna(subset=["value"], how='all')  # drop NaNs in column name
-        df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        if usecs:
+            df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        else:
+            df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+
         df = df.set_index("time")
         df["value"] = df["value"].values.astype(int)
         del df["timestamp"]
@@ -856,7 +861,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                  "VALID_TIME_END", "PARAMETERS", "DATASTREAM_ID", "FEATURE_ID", "ID"]]
         df.to_csv(filename, index=False)
 
-    def format_json_csv(self, df_in, filename):
+    def format_json_csv(self, df_in, filename, usecs=False):
         """
         Takes a dataframe and arranges it accordingly to the OBSERVATIONS table from a SensorThings API, preparing the
         data to be inserted by a COPY statement
@@ -873,7 +878,11 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         df = df_in.copy(deep=True)
         df = df.dropna(subset=["results"], how='all')  # drop NaNs in column name
 
-        df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="s", timezone="UTC")
+        if usecs:
+            df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="us", timezone="UTC")
+        else:
+            df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="s", timezone="UTC")
+
         if "timeEnd" in df.columns:  # if we have the average period
             df["PHENOMENON_TIME_END"] = np.datetime_as_string(df["timeEnd"], unit="s", timezone="UTC")
         else:

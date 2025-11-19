@@ -38,6 +38,7 @@ def open_csv(csv_file, time_format="", time_range=[], format=False) -> pd.DataFr
         time_formats = [
             "%Y-%m-%d %H:%M:%S%z",
             "%Y-%m-%d %H:%M:%S.%f%z",
+            "%Y-%m-%d %H:%M:%S.%f",
             "%Y-%m-%dT%H:%M:%Sz",
             "%Y-%m-%dT%H:%M:%S.%fz",
             "%Y-%m-%d %H:%M:%S",

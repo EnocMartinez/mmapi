@@ -18,7 +18,7 @@ import logging
 
 
 def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str, destination: str, foi_id: int,
-                    log: logging.Logger, do_not_send=False, usecs=False, no_date=False):
+                    log: logging.Logger, do_not_send=False, usecs=False, no_date=False, station=""):
 
     sta_data = { # SensorThings data
         "timestamp": [],
@@ -90,13 +90,13 @@ def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str,
         log.info("Sending all files")
         dc.fileserver.bulk_send(list(fs_df["src"]), list(fs_df["dst"]))
 
-    bulk_load_data(csv_filename, secrets, "", sensor_name, "files", foi_name, usecs=usecs)
+    bulk_load_data(csv_filename, secrets, sensor_name, "files", foi_name, usecs=usecs, station_name=station)
 
 
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
-    argparser.add_argument("path", help="Dataset ID", type=str)
+    argparser.add_argument("path", help="Source path", type=str)
     argparser.add_argument("sensor_name", help="Sensor name as registered in SensorThings", type=str)
     argparser.add_argument("destination", help="Destination path in the fileserver", type=str)
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
@@ -110,6 +110,8 @@ if __name__ == "__main__":
                            action="store_true")
 
     argparser.add_argument("--usecs", help="use microsecond precision", action="store_true")
+    argparser.add_argument("--station-name", help="Ignore metadata records and assign data to station", type=str,
+                           required=False)
 
     args = argparser.parse_args()
     all_files = file_list(args.path)
@@ -169,4 +171,4 @@ if __name__ == "__main__":
         raise ValueError(f"Sensor name {args.sensor_name} not found in destination path: {args.sensor_name}")
 
     bulk_load_files(dc,all_files, args.path, args.sensor_name, destination, foi_id, log, do_not_send=args.do_not_send,
-                    usecs=args.usecs, no_date=args.no_date)
+                    usecs=args.usecs, no_date=args.no_date, station=args.station_name)

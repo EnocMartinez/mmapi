@@ -1715,7 +1715,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         with self.assertRaises(ConnectionError):
             post_json(url, d)
 
-        # Now, let's download all the data that we injected, see if it's availabl
+        # Now, let's download all the data that we injected, see if it's available
         data = get_json(self.sta_url + f"/Datastreams({datastream_id})/Observations")
         results = data["value"]
         self.assertEqual(len(results), len(files))

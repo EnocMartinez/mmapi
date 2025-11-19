@@ -362,6 +362,7 @@ def rsync_files(host: str, folder, files: list):
     assert type(host) is str, "invalid type"
     assert type(folder) is str, "invalid type"
     assert type(files) is list, "invalid type"
+    assert len(files) > 0 , "File list is empty!"
     run_subprocess(["ssh", host, f"mkdir -p {folder} -m=777"], fail_exit=True)
     run_subprocess(f"rsync -azh {' '.join(files)} {host}:{folder}")
 

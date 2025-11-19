@@ -418,6 +418,7 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
     rich.print("[purple]==== Bulk load Data ====")
     rich.print(f"    filename={filename}")
     rich.print(f"    sensor={sensor_name}")
+    rich.print(f"    station={station_name}")
     rich.print(f"    dataType={data_type}")
     rich.print(f"    average={average}")
     assert data_type in mmapi_data_types, f"data_type={data_type} not valid!"
@@ -524,13 +525,13 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
             db.inject_to_observations(df, datastreams, foi_id, average, profile=True)
 
     elif data_type == "detections":
-        db.inject_to_detections(df, tmp_folder=tmp_folder)
+        db.inject_to_detections(df, tmp_folder=tmp_folder, usecs=usecs)
 
     elif data_type == "files":
         db.inject_to_files(df, tmp_folder=tmp_folder, usecs=usecs)
 
     elif data_type == "json":
-        db.inject_to_json(df)
+        db.inject_to_json(df, usecs=usecs)
 
     else:
         raise ValueError("This should never happen!")
