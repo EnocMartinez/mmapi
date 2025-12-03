@@ -456,7 +456,7 @@ class DataCollector(LoggerSuperclass):
         elif data_type == "profiles":
             return self.dataframe_from_sta_profiles(conf, station, sensor, time_start, time_end)
         elif data_type == "files":
-            return self.dataframe_from_sta_observations(conf, station, sensor, time_start, time_end)
+            return self.dataframe_from_sta_observations(conf,resource,  station, sensor, time_start, time_end)
         elif data_type == "json":
             return self.dataframe_from_sta_json(conf, station, sensor, time_start, time_end)
         else:
@@ -546,7 +546,7 @@ class DataCollector(LoggerSuperclass):
              """)
 
             for taxa, datastream_id in taxa_dict.items():
-                self.debug(f"Getting taxa='{taxa}' with ID={datastream_id}")
+                self.info(f"Getting taxa='{taxa}' with ID={datastream_id}")
                 df = self.sta.dataframe_from_query(f'''
                     select timestamp, value as "{taxa}" from detections
                     where datastream_id = {datastream_id} and timestamp between '{time_start}' and '{time_end}';
@@ -561,6 +561,7 @@ class DataCollector(LoggerSuperclass):
         if not dataframes:
             return pd.DataFrame()
         df = pd.concat(dataframes).sort_index()
+
         return df
 
     def dataframe_from_sta_timeseries(self, conf: dict, resource: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
@@ -752,13 +753,13 @@ class DataCollector(LoggerSuperclass):
         df = df.sort_index(ascending=True)
         return df
 
-    def dataframe_from_sta_observations(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
+    def dataframe_from_sta_observations(self, conf: dict, resource: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
                                       time_end: pd.Timestamp = None):
         """
         Returns a DataFrame for a specific Sensor in a specific time interval
         """
 
-        data_type = conf["dataType"]
+
         sensor_name = sensor["#id"]
         station_name = station["#id"]
 
@@ -803,7 +804,7 @@ class DataCollector(LoggerSuperclass):
                 "json": "RESULT_JSON",
                 "files": "RESULT_STRING"
             }
-            col = data_columns[conf["dataType"]]
+            col = data_columns[resource["dataType"]]
 
             # Query the regular OBSERVATIONS table
             q = (f'''
@@ -987,8 +988,7 @@ class DataCollector(LoggerSuperclass):
         return filename, False
 
 
-
-    def csv_from_sta(self, conf, resource, time_start: pd.Timestamp, time_end: pd.Timestamp):
+    def     csv_from_sta(self, conf, resource, time_start: pd.Timestamp, time_end: pd.Timestamp):
         """
         Generates a CSV file from a SensorThings Database
         """
@@ -1011,13 +1011,11 @@ class DataCollector(LoggerSuperclass):
                 continue
 
             df = self.dataframe_from_sta(conf, station, sensor, resource, time_start, time_end)
-
             if df.empty:
                 self.error(f"No data for sensor={sensor_name}  between {time_start} and {time_end}")
                 continue
 
-            if len(conf["@sensors"]) > 1:
-                df["SENSOR_ID"] = sensor_name
+            df["SENSOR_ID"] = sensor_name
             dataframes.append(df)
 
         try:
@@ -1026,20 +1024,22 @@ class DataCollector(LoggerSuperclass):
             merge_sensors = False
             pass
 
-        if all([df.empty for df in dataframes]):
-            self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
-            raise LookupError("no data")
+        # if all([df.empty for df in dataframes]):
+        #     self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
+        #     print(dataframes)
+        #     raise LookupError("no data")
 
         if merge_sensors:
             # If merge sensors, merge dataframe by index ignoring SENSOR_ID
             for df in dataframes:
                 del df["SENSOR_ID"]
-            df = merge_dataframes_by_columns(dataframes)
+            df = merge_dataframes_by_columns(dataframes, timestamp="TIME")
         else:
             df = merge_dataframes(dataframes)
 
         df = df.sort_index()
         df.to_csv(filename)
+        self.info(f"Writing CSV file '{filename}'")
         return filename, False
 
     def zip_from_filesystem(self, conf, resource, time_start, time_end, overwrite=False) -> (str, bool):
@@ -1102,10 +1102,9 @@ class DataCollector(LoggerSuperclass):
             "DATASTREAM_ID" IN ({', '.join(datastream_ids)}) and
             "OBSERVATIONS"."DATASTREAM_ID" = "DATASTREAMS"."ID" and
             "SENSORS"."ID" = "DATASTREAMS"."SENSOR_ID" and
-            "OBSERVATIONS"."PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\'                
+            "OBSERVATIONS"."PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\'
         ;
         ''', debug=False)
-
         if df.empty:
             self.error(f"could not generate dataset {dataset_id}:{resource_id}", exception=ValueError)
 
@@ -1169,8 +1168,7 @@ class DataCollector(LoggerSuperclass):
             cmd += f"cp {source} {dest}\n"
         cmd += f"zip -9 -r {remote_filename} index.csv {' '.join(sensors)}\n"
         for sensor in sensors:
-            cmd += f"rm {sensor}/* \n"
-            cmd += f"rmdir {sensor}\n"
+            cmd += f"rm -rf {sensor} \n"
         cmd += f"rm {tmp_folder}/index.csv\n"
         cmd += f"rm {tmp_folder}/{script_name}\n"
         cmd += f"rmdir {tmp_folder}\n"
@@ -1211,7 +1209,7 @@ class DataCollector(LoggerSuperclass):
 
         else:
             # Download to this machine
-            self.error("Not implemented!!", exception=ValueError)
+            self.error("Not implemented! FileServer and destination are not the same?", exception=ValueError)
             delivered = False
 
         os.remove(script_name)

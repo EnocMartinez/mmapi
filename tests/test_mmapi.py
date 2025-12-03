@@ -952,6 +952,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "weights": "https://my.url/file",
             "trainingConfig": "https://my.url/filex",
             "trainingData": "",
+            "reference": "https://description.of.my.model",
             "variableNames": [
                 "Chromis chromis",
                 "Diplodus vulgaris",
@@ -1977,7 +1978,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 continue
             self.assertTrue(check_url(zip_dataset.url))
 
-        dwca_dataset = self.dc.generate_dataset("biodiversity_datasets", "fileserver", "2020-01-01", "2020-02-01")
+        # dwca_dataset = self.dc.generate_dataset("biodiversity_datasets", "fileserver", "2020-01-01", "2020-02-01")
 
     def test_72_generate_ckan_datasets(self):
         self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01") # default format

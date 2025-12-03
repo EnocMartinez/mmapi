@@ -19,6 +19,7 @@ import pandas as pd
 import rich
 import requests
 import subprocess
+import socket
 
 # Color codes
 GRN = "\x1B[32m"
@@ -263,6 +264,7 @@ def run_subprocess(cmd, fail_exit=True):
         cmd_list = cmd
     else:
         cmd_list = cmd.split(" ")
+    cmd_list = [part for part in cmd_list if part]  # avoid empty strings
     proc = subprocess.run(cmd_list, capture_output=True)
     stdout = proc.stdout.decode()
     if proc.returncode != 0:
@@ -363,8 +365,12 @@ def rsync_files(host: str, folder, files: list):
     assert type(folder) is str, "invalid type"
     assert type(files) is list, "invalid type"
     assert len(files) > 0 , "File list is empty!"
-    run_subprocess(["ssh", host, f"mkdir -p {folder} -m=777"], fail_exit=True)
-    run_subprocess(f"rsync -azh {' '.join(files)} {host}:{folder}")
+    if socket.gethostname() == host:
+        rich.print("Using localhost!")
+        run_subprocess(f"rsync -azh {' '.join(files)} {folder}")
+    else:
+        run_subprocess(["ssh", host, f"mkdir -p {folder} -m=777"], fail_exit=True)
+        run_subprocess(f"rsync -azh {' '.join(files)} {host}:{folder}")
 
 
 def rm_remote_files(host, files):
@@ -373,7 +379,13 @@ def rm_remote_files(host, files):
     """
     assert type(host) is str, "invalid type"
     assert type(files) is list, "invalid type"
-    run_subprocess(["ssh", host, f"rm  {' '.join(files)}"], fail_exit=True)
+    if host == socket.gethostname():
+
+        files = [f for f in files if os.path.exists(f)]
+        if len(files) > 0:
+            run_subprocess(f"rm {' '.join(files)}", fail_exit=True)
+    else:
+        run_subprocess(["ssh", host, f"rm {' '.join(files)}"], fail_exit=True)
 
 
 def assert_dict(conf: dict, required_keys: dict, verbose=False):

@@ -387,7 +387,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 os.remove(file)
                 progress.advance(task1, advance=1)
 
-        rich.print("[magenta]Inserting all detections via SQL COPY took %.02f seconds" % (time.time() - init))
+        rich.print("[magenta]Inserting all files via SQL COPY took %.02f seconds" % (time.time() - init))
 
         if self.host != "localhost" and self.host != "127.0.0.1":
             rm_remote_files(self.host, files)
@@ -430,7 +430,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 os.remove(file)
                 progress.advance(task1, advance=1)
 
-        rich.print("[magenta]Inserting all detections via SQL COPY took %.02f seconds" % (time.time() - init))
+        rich.print("[magenta]Inserting all json via SQL COPY took %.02f seconds" % (time.time() - init))
 
         if self.host != "localhost" and self.host != "127.0.0.1":
             rm_remote_files(self.host, files)

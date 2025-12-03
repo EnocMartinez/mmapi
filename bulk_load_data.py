@@ -30,7 +30,7 @@ if __name__ == "__main__":
     argparser.add_argument("-f", "--files", help="Files data (register the paths)", action="store_true")
     argparser.add_argument("--usecs", help="use microsecond precision", action="store_true")
     argparser.add_argument("-F", "--foi", help="FeatureOfInterest ID to assign to the Observations", type=str, required=False)
-    argparser.add_argument("--missing-data", help="Inject data that is not already in the database",  type=str, required=False)
+    argparser.add_argument("--missing-data", help="Inject data that is not already in the database ('direct' or 'hourly')",  type=str, required=False)
     argparser.add_argument("--station-name", help="Ignore metadata records and assign data to station", type=str,
                            required=False)
     args = argparser.parse_args()
