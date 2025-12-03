@@ -171,7 +171,10 @@ class FileServer(LoggerSuperclass):
 
         args = []
         for dst, src in files.items():
-            cmd = f"rsync {' '.join(src)} {self.host}:{dst}"
+            if self.host == socket.gethostname():
+                cmd = f"cp {' '.join(src)} {dst}"
+            else:
+                cmd = f"rsync {' '.join(src)} {self.host}:{dst}"
             args.append([cmd, False])
 
         threadify(args, run_subprocess, text="sending files...")

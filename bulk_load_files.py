@@ -48,8 +48,6 @@ def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str,
         else:
             file_dest = os.path.join(destination,  t.strftime("%Y/%m/%d"), os.path.basename(file))
 
-
-
         sta_data["results"].append(dc.fileserver.path2url(file_dest))
         sta_data["datastream_id"].append(datastream_id)
         sta_data["foi_id"].append(foi_id)
@@ -58,7 +56,6 @@ def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str,
         fs_data["timestamp"].append(t)
         fs_data["src"].append(file)
         fs_data["dst"].append(file_dest)
-
 
     sta_df = pd.DataFrame(sta_data)
     sta_df["timestamp"] = pd.to_datetime(sta_df["timestamp"])
