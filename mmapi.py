@@ -12,16 +12,21 @@ import datetime
 from dateutil.relativedelta import relativedelta
 from argparse import ArgumentParser
 import yaml
-from flask import Flask, request, Response
+from flask import Flask, request, Response, jsonify
 from flask_cors import CORS
 from mmm import MetadataCollector, init_metadata_collector_env, init_metadata_collector
 from mmm.common import setup_log
 from mmm.schemas import mmm_schemas, mmm_metadata
 import json
 import os
+from flask_basicauth import BasicAuth
 
 app = Flask(__name__)
+basic_auth = BasicAuth(app)
 CORS(app)
+app.config['BASIC_AUTH_USERNAME'] = 'admin'
+app.config['BASIC_AUTH_PASSWORD'] = 'secret123'
+app.config['BASIC_AUTH_FORCE'] = True  # Require auth for all routes
 
 
 def run_metadata_api(secrets: str|dict,  log, mc):
@@ -43,6 +48,14 @@ def run_metadata_api(secrets: str|dict,  log, mc):
         port = 8080
     else:
         port = secrets["mmapi"]["port"]
+    print("Available endpoints:")
+    for rule in app.url_map.iter_rules():
+        print(f"{rule.endpoint}: {rule.rule} [{', '.join(rule.methods)}]")
+
+    app.config["BASIC_AUTH_USERNAME"] = secrets["mmapi"]["basic_auth_user"]
+    app.config["BASIC_AUTH_PASSWORD"] = secrets["mmapi"]["basic_auth_user"]
+    app.config['BASIC_AUTH_FORCE'] = True  # Require auth for all routes
+
     app.run(host="0.0.0.0", port=port, debug=False)
     return app
 
@@ -69,7 +82,24 @@ def default_index():
 @app.route('/mmapi/v1.0/<path:collection>', methods=['GET'])
 def get_collection(collection: str):
     try:
+        opts = request.args.to_dict()
         documents = app.mc.get_documents(collection)
+        for key, value in opts.items():
+            documents = [doc for doc in documents if key in doc.keys() and doc[key] == value]
+
+    except LookupError:
+        return api_error(f"Collection not '{collection}', valid collection names {app.mc.collection_names}")
+    return Response(json.dumps(documents), status=200, mimetype="application/json")
+
+
+@app.route('/mmapi/v1.0/<path:collection>/ids', methods=['GET'])
+def get_collection_ids(collection: str):
+    try:
+        opts = request.args.to_dict()
+        documents = app.mc.get_documents(collection)
+        for key, value in opts.items():
+            documents = [doc["#id"] for doc in documents if key in doc.keys() and doc[key] == value]
+
     except LookupError:
         return api_error(f"Collection not '{collection}', valid collection names {app.mc.collection_names}")
     return Response(json.dumps(documents), status=200, mimetype="application/json")
@@ -120,6 +150,7 @@ def post_to_validate(collection: str):
 def put_to_collection(collection: str, document_id: str):
     document = json.loads(request.data)
     app.log.debug(f"Checking if collection {collection} exists...")
+
     if collection not in app.mc.collection_names:
         return api_error(f"Collection not '{collection}', valid collection names {mc.collection_names}")
 
@@ -171,6 +202,21 @@ def get_meta_schema():
     return Response(json.dumps(mmm_metadata), status=200, mimetype="application/json")
 
 
+@app.route('/mmapi/activity_types', methods=['GET'])
+def get_activity_types():
+    schema = mmm_schemas["activities"]["properties"]["type"]["enum"]
+    return Response(json.dumps(schema), status=200, mimetype="application/json")
+
+@app.route('/mmapi/operation_types', methods=['GET'])
+def get_operation_types():
+    schema = mmm_schemas["operations"]["properties"]["type"]["enum"]
+    return Response(json.dumps(schema), status=200, mimetype="application/json")
+
+@app.route('/mmapi/operation_role_types', methods=['GET'])
+def get_operation_role_types():
+    schema = mmm_schemas["operations"]["properties"]["participants"]["items"]["properties"]["roles"]["items"]["enum"]
+    return Response(json.dumps(schema), status=200, mimetype="application/json")
+
 
 @app.route('/mmapi/v1.0/schemas/<path:collection>', methods=['GET'])
 def get_schema(collection: str):
@@ -181,7 +227,6 @@ def get_schema(collection: str):
 
     schema = mmm_schemas[collection]
     return Response(json.dumps(schema), status=200, mimetype="application/json")
-
 
 @app.route('/mmapi/v1.0/<path:collection>/<path:identifier>/history', methods=['GET'])
 def get_document_history(collection: str, identifier: str):
@@ -213,6 +258,24 @@ def get_history_by_id(collection: str, identifier: str, version: int):
 
     return Response(json.dumps(document), status=200, mimetype="application/json")
 
+@app.route('/mmapi/v1.0/deployedSensors/<station_id>', methods=['GET'])
+def get_deployed_sensors_by_stations(station_id: str):
+    mc = app.mc
+    import rich
+    sensor_ids = mc.get_identifiers("sensors")
+    app.log.info("Getting last deployment for every sensor...")
+    sensors = []
+    for sensor_id in sensor_ids:
+        try:
+            deployment_station, time, active = mc.get_last_sensor_deployment(sensor_id)
+        except LookupError:
+            app.log.info(f"No sensor deployment for {sensor_id}")
+            continue
+
+        if active and deployment_station == station_id:
+            sensors.append(sensor_id)
+
+    return Response(json.dumps(sensors), status=200, mimetype="application/json")
 
 @app.route('/mmapi/v1.0/projects_timeline', methods=['GET'])
 def project_timeline():
@@ -268,14 +331,29 @@ def project_timeline():
     return Response(json.dumps(resp), status=200, mimetype="application/json")
 
 
+@app.route('/endpoints', methods=['GET'])
+def list_endpoints():
+    """Endpoint to list all available endpoints"""
+    base_url = request.host_url  # Includes scheme and host with trailing slash
+    endpoints = []
+    for rule in app.url_map.iter_rules():
+        # Filter out static routes
+        if rule.endpoint != 'static':
+            endpoints.append({
+                'endpoint': rule.endpoint,
+                'methods': list(rule.methods - {'OPTIONS', 'HEAD'}),
+                'url': base_url + str(rule)
+            })
+    return jsonify({'endpoints': endpoints})
+
+
 if __name__ == "__main__":
     argparser = ArgumentParser()
-    argparser.add_argument("secrets", help="Initialize from secrets yaml file", type=str, default="")
+    argparser.add_argument("-s", "--secrets", help="Initialize from secrets yaml file", type=str, default="secrets.yaml")
     args = argparser.parse_args()
 
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
-
 
     log = setup_log("Metadata API")
     mc = init_metadata_collector(secrets, log=log)
