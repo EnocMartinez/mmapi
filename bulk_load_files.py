@@ -129,8 +129,21 @@ if __name__ == "__main__":
             where "SENSOR_ID" = {sensor_id} and
             "PROPERTIES"->>'dataType' = 'files';
     '''
-    datastream_id = dc.sta.value_from_query(q)
-    log.info(f"Datastream for files in sensor {args.sensor_name} is {datastream_id}")
+    try:
+        datastream_id = dc.sta.value_from_query(q)
+        log.info(f"Datastream for files in sensor {args.sensor_name} is {datastream_id}")
+    except LookupError:
+        log.info(f"Multiple datastreams found, filtering by station-id")
+        station_id = dc.sta.value_from_query(f'select "ID" from "THINGS" where "NAME" = \'{args.station_name}\';')
+        q = f'''
+            select "ID" from "DATASTREAMS" 
+                where 
+                "SENSOR_ID" = {sensor_id} and
+                "THING_ID" = {station_id} and
+                "PROPERTIES"->>'dataType' = 'files';
+        '''
+        datastream_id = dc.sta.value_from_query(q)
+
 
     if args.foi:
         if str(args.foi).isdecimal():
