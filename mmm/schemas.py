@@ -542,7 +542,10 @@ __operations = {
             "items": {"type": "string"},
             "$comment": "$style=ActivitySelector"  # Force ActivitySelector class
         },
-        "@projects": __string_list__,
+        "@projects": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
         "@resources": __string_list__,
         "links": __string_list__,
         "comment": {"type": "string"}
