@@ -892,7 +892,7 @@ class MetadataCollector(LoggerSuperclass):
         doc = self.db.value_from_query(
             f"""
             select doc from activities 
-            where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@sensors' = '{sensor_id}'
+            where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@sensors' = '{sensor_id}' and doc->>'status' = 'done' 
             order by (doc->>'time')::timestamp desc
             limit 1
             """

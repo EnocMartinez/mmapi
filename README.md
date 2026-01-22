@@ -77,7 +77,7 @@ In marine metadata api (mmapi) metadata schema, there are the following elements
 ### Contact info ###
 
 * **author**: Enoc Martínez  
-* **version**: 0.0.3
+* **version**: 0.1.0
 * **organization**: Universitat Politècnica de Catalunya (UPC)  
 * **contact**: enoc.martinez@upc.edu  
 

@@ -15,7 +15,7 @@ import rich
 from mmm.common import load_fields_from_dict, YEL, RST
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
 from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream, \
-    HistoricalLocation, set_sta_basic_auth
+    HistoricalLocation, set_sta_basic_auth, init_sta_cache
 from mmm.metadata_collector import get_station_coordinates, get_station_history, get_sensor_deployments
 from mmm.processes import average_process, inference_process
 from mmm.schemas import mmapi_data_types
@@ -222,6 +222,9 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
     location_ids = {}
     obs_props_ids = {}
     fois = {}
+
+    init_sta_cache(url)
+
 
     # Convert "programmes" into "FeaturesOfInterest"
     programmes = mc.get_documents("programmes")

@@ -179,6 +179,15 @@ __project_types__ = [
 
 __partnership_types__ = ["coordinator", "participant", "thirdParty", "other", "associatedPartner"]
 
+
+
+# Possible values of the status indicator for operations and activities
+__status_type__ = [
+    "pending",   # Deployment of a instrument, platform or resource
+    "planned",     # recovery a previously deployed asset
+    "done"  # operation to ensure the proper functionality of an asset, such as replacing broken parts
+]
+
 # -----------------------------#
 __people = {
     "$id": "mmm:people",
@@ -482,6 +491,10 @@ __activities = {
             "type": "string",
             "enum": __activity_type__
         },
+        "status": {
+            "type": "string",
+            "enum": __status_type__,
+        },
         "appliedTo": {
             "oneOf": [
                 {"type": "object", "properties": {"@sensors": {"type": "string",  "minLength": 2}}, "required":["@sensors"]},
@@ -504,7 +517,7 @@ __activities = {
             ]
         }
     },
-    "required": ["description", "appliedTo", "time"]
+    "required": ["description", "appliedTo", "time", "status"]
 }
 
 
@@ -514,6 +527,10 @@ __operations = {
     "properties": {
         "description": {"type": "string"},
         "timeRange": {"type": "string"},
+        "status": {
+            "type": "string",
+            "enum": __status_type__,
+        },
         "type": {
             "type": "string",
             "enum": __operation_type__
@@ -532,9 +549,10 @@ __operations = {
             "type": "array",
             "items": {"type": "string"}
         },
+        "links": __string_list__,
         "comment": {"type": "string"}
     },
-    "required": ["description", "timeRange", "type", "participants", "@activities"],
+    "required": ["description", "timeRange", "type", "participants", "@activities", "status"],
 }
 
 __variable_types = [
