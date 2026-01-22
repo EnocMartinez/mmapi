@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 WORKDIR /app
 COPY ./mmm /app/mmm
 COPY ./*.py ./requirements.txt /app
@@ -6,7 +6,7 @@ COPY ./*.py ./requirements.txt /app
 RUN apt update && \
   apt install python3 -y && \
   apt install python3-pip -y && \
-  pip3 install -r requirements.txt --no-cache-dir  && \
+  pip3 install -r requirements.txt --no-cache-dir  --break-system-packages && \
   apt purge gcc g++ python3-pip  -y && \
   apt autoremove -y && \
   rm -rf /var/lib/apt/lists/* && \

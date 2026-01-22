@@ -286,6 +286,20 @@ def sensorthings_delete(url, endpoint="", header={"Content-type": "application/j
         print_http_response(http_response)
         raise ValueError("HTTP ERROR")
 
+def split_elements(list):
+    for element in list:
+        url = element["@iot.selfLink"]
+        _api_cache[url] = element
+
+def init_sta_cache(url):
+    r = sensorthings_get(url, "Sensors")
+    split_elements(r["value"])
+    r = sensorthings_get(url, "FeaturesOfInterest")
+    split_elements(r["value"])
+    r = sensorthings_get(url, "Things")
+    split_elements(r["value"])
+    r = sensorthings_get(url, "Datastreams")
+    split_elements(r["value"])
 
 class AbstractSensorThings:
     def __init__(self, element_type, name="", description=""):
@@ -400,14 +414,15 @@ class AbstractSensorThings:
         :return: True or False
         """
         entity_url = self.entity_url(baseurl)
-
         if cache and entity_url not in _api_cache.keys():
             url = entity_url + "?$top=10000"
             http_response = requests.get(url, auth=sta_auth, verify=verify_ssl)
             check_http_status(http_response)
             registered_elements = json.loads(http_response.text)
             _api_cache[entity_url] = json.loads(http_response.text)
+            rich.print(f"[cyan]----> real API call")
         else:
+            rich.print("[grey42]-----> Using cache")
             registered_elements = _api_cache[entity_url]
 
         for e in registered_elements["value"]:

@@ -538,7 +538,6 @@ __operations = {
         "participants": __people_with_roles__(__operation_roles__),
         "@activities": {
             "type": "array",
-            "minItems": 1,
             "items": {"type": "string"},
             "$comment": "$style=ActivitySelector"  # Force ActivitySelector class
         },
@@ -546,7 +545,10 @@ __operations = {
             "type": "array",
             "items": {"type": "string"}
         },
-        "@resources": __string_list__,
+        "@resources": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
         "links": __string_list__,
         "comment": {"type": "string"}
     },
