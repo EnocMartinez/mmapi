@@ -286,8 +286,8 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                 loc_name = f"Location of {name} at lat={lat}, lon={lon}, depth={depth} meters"
                 loc_description = dep["description"]
                 location = Location(loc_name, loc_description, lat, lon, depth, things=[])
-                location.register(url, update=update, verbose=True)
 
+                location.register(url, update=update, verbose=True)
                 histloc = HistoricalLocation(dep["time"], location, t)
                 histloc.register(url, verbose=True, update=update)
 
@@ -409,7 +409,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
 
 
 def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, foi_name: str, average="",
-                   usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data", missing_data:str ="", station_name="") -> bool:
+                   usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data", missing_data:str ="", station_name="", time_range=None) -> bool:
     """
     This function performs a bulk load of the data contained in the input file
 
@@ -436,7 +436,18 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
 
     df = df.set_index("timestamp")
     df = df.sort_index()
+    if time_range:
+        start_s, end_s = time_range.split("/")
+        start = pd.to_datetime(start_s, utc=True)
+        end = pd.to_datetime(end_s, utc=True)
 
+        if df.index.tz is None:
+            df.index = df.index.tz_localize("UTC")
+
+        df = df[(df.index >= start) & (df.index <= end)]
+
+        if df.empty:
+            raise ValueError("Empty dataframe after applying --time-range")
     if no_qc:
         for var in df.columns:
             if var.endswith("_QC"):
@@ -497,10 +508,13 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
     if data_type == "timeseries":
         if not average:  # timeseries with full data
             datastreams_conf = db.get_datastream_config(sensor=sensor_name, station=station_name,  data_type=data_type, full_data=True)
+            assert len(datastreams_conf) > 0, f"No datastreams found for sensor='{sensor_name}' station='{station_name}' with dataType='{data_type}'"
             datastreams = {
                 row["variable_name"]: row["datastream_id"] for _, row in datastreams_conf.iterrows()
             }
             df = drop_duplicated_indexes(df)
+            rich.print(df)
+            rich.print(datastreams)
             db.inject_to_timeseries(df, datastreams, tmp_folder=tmp_folder, usecs=usecs)
 
         else:  # averaged timeseries

@@ -43,7 +43,8 @@ def open_csv(csv_file, time_format="", time_range=[], format=False) -> pd.DataFr
             "%Y-%m-%dT%H:%M:%S.%fz",
             "%Y-%m-%d %H:%M:%S",
             "%Y/%m/%d %H:%M:%S",
-            "%d/%m/%Y %H:%M:%S"
+            "%d/%m/%Y %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%f"
         ]
         opened = False
         for fmt in time_formats:

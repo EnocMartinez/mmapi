@@ -22,6 +22,7 @@ if __name__ == "__main__":
     argparser.add_argument("-n", "--no-qc", help="Put an NO_QC flag to all empty QC", action="store_true")
     argparser.add_argument("file", help="Data file", type=str)
     argparser.add_argument("sensor_id", help="Sensor ID", type=str)
+    argparser.add_argument("--time-range", help="Time range filter: start/end in ISO format", type=str, required=False)
     argparser.add_argument("-a", "--average", help="Averaged data (period must be specified)", type=str, default="")
     argparser.add_argument("-d", "--detections", help="Detections data", action="store_true")
     argparser.add_argument("-t", "--timeseries", help="Timeseries data", action="store_true")
@@ -64,7 +65,7 @@ if __name__ == "__main__":
         assert args.missing_data in ["hourly", "direct"], f"Expected 'hourly' or 'direct', but got {args.missing_data} instead "
 
     bulk_load_data(args.file, secrets, args.sensor_id, data_type, args.foi, average=args.average, no_qc=args.no_qc,
-                   usecs=args.usecs, missing_data=args.missing_data, station_name=args.station_name)
+                   usecs=args.usecs, missing_data=args.missing_data, station_name=args.station_name, time_range=args.time_range)
 
 
 

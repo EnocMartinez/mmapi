@@ -346,6 +346,7 @@ class AbstractSensorThings:
         """
         headers = {"Content-Type": "application/json"}
         data = self.serialize()
+        rich.print(self.selfLink)
         http_response = requests.patch(self.selfLink, data=data, headers=headers, auth=sta_auth, verify=verify_ssl)
         check_http_status(http_response)
 

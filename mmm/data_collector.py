@@ -1089,7 +1089,6 @@ class DataCollector(LoggerSuperclass):
 
         if len(datastream_ids) == 0:
             raise ValueError(f"No valid Datastreams found for sensors={conf['@sensors']} with dataType=files")
-
         # Now let's query for all registered files in the database matching the datastreams
         df = self.sta.dataframe_from_query(f'''
          select 
@@ -1122,6 +1121,7 @@ class DataCollector(LoggerSuperclass):
         #    3.4 delete temporal files
 
         files = list(df["urls"])  # List of all files to be compressed
+        rich.print(files)
 
         if len(files) < 1:
             raise ValueError(f"No files to be zipped!")

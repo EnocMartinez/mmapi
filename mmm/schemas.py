@@ -521,12 +521,17 @@ __operations = {
         "participants": __people_with_roles__(__operation_roles__),
         "@activities": {
             "type": "array",
-            "minItems": 1,
             "items": {"type": "string"},
             "$comment": "$style=ActivitySelector"  # Force ActivitySelector class
         },
-        "@projects": __string_list__,
-        "@resources": __string_list__,
+        "@projects": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
+        "@resources": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
         "comment": {"type": "string"}
     },
     "required": ["description", "timeRange", "type", "participants", "@activities"],
