@@ -11,19 +11,10 @@ license: MIT
 created: 3/10/23
 """
 
-try:
-    from .metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
-except ImportError:
-    from metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
 
-import os.path
-from argparse import ArgumentParser
-import lxml.etree as etree
-import yaml
+from .metadata_collector import MetadataCollector
 import rich
-from xmlutils import get_elements, get_element, get_element_text
 import requests
-import json
 
 
 def csv_with_multiple_lines(text):
@@ -107,32 +98,4 @@ def aei_project(mc: MetadataCollector, project_id, acronym, time_start: str = ""
     data = get_aei_metadata(project_id)
     data["acronym"] = acronym
     data["#id"] = acronym
-    rich.print(data)
-    if not force:
-        rich.print("[cyan]Store this information into database? (yes/on)")
-        response = input()
-        if response != "yes":
-            rich.print("[red]Aborting")
-            exit()
-    else:
-        rich.print("[purple]Ingesting into database (forced with cli arguments)")
     return data
-
-
-if __name__ == "__main__":
-    argparser = ArgumentParser()
-    argparser.add_argument("project_id", type=str, help="Project ID to fetch in CORDIS", default="")
-    argparser.add_argument("acronym", type=str, help="Project acronym", default="")
-    argparser.add_argument("-i", "--institution", type=str, help="Institution of interest short name, e.g. UPC",
-                           default="UPC")
-    argparser.add_argument("--clear", action="store_true", help="clears all prevoius downloads", default=False)
-    argparser.add_argument("--force", action="store_true", help="skips insert question", default=False)
-    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
-                           default="secrets.yaml")
-
-    args = argparser.parse_args()
-    with open(args.secrets) as f:
-        secrets = yaml.safe_load(f)["secrets"]
-    mc = init_metadata_collector(secrets)
-    data = aei_project(mc, args.project_id, args.acronym, force=args.force)
-    mc.insert_document("projects", data, update=True)

@@ -8,14 +8,7 @@ license: MIT
 created: 27/10/23
 """
 import os
-from os.path import exists
-
-import rich
-import yaml
 import math
-from mmm.data_manipulation import open_csv
-from mmm import MetadataCollector, init_metadata_collector
-import pandas as pd
 import pandas as pd
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature

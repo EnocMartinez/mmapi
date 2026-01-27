@@ -9,19 +9,14 @@ license: MIT
 created: 3/10/23
 """
 
-try:
-    from .metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
-except ImportError:
-    from metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
+
 
 import os.path
-from argparse import ArgumentParser
 import lxml.etree as etree
-import yaml
 import rich
-from xmlutils import get_elements, get_element, get_element_text
 import requests
-import json
+from .xmlutils import get_elements, get_element, get_element_text
+from .metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
 
 # Harcoded acronyms that are usually missing in CORDIS
 hardcoded_acronyms = {
@@ -38,7 +33,6 @@ def assign_orgs_to_project(mc: MetadataCollector, data: dict) -> dict:
     Loops through all the organizations in a project and assigns the proper @organizatino field (if found).
     If the shortName (acronym) OR one of the alternative names match it is considered the same
     """
-    rich.print(data)
     partners = []
     registered_organizations = mc.get_documents("organizations")
     for p in data["funding"]["partners"]:
@@ -52,9 +46,14 @@ def assign_orgs_to_project(mc: MetadataCollector, data: dict) -> dict:
     return data
 
 
-def get_cost_from_organization(organization: etree.ElementTree()):
+def get_cost_from_organization(organization: etree.ElementTree(), org_name: str):
     possible_terms = ["totalCost", "ecContribution", "netEcContribution"]
-    return float(__attribute_from_names(organization, possible_terms))
+    try:
+        return float(__attribute_from_names(organization, possible_terms))
+    except LookupError:
+
+        rich.print(f"[red]Cost could not be extracted from {org_name}, setting to 0 €[/red]")
+        return 0.0
 
 
 def __attribute_from_names(organization: etree.ElementTree, terms: list):
@@ -71,6 +70,7 @@ def __attribute_from_names(organization: etree.ElementTree, terms: list):
         except KeyError:
             continue
     if not result:
+
         raise LookupError(f"Could not extract value, none of the following terms where found: {terms}")
 
 
@@ -161,52 +161,9 @@ def get_cordis_metadata(project_id: int, folder=".cordis", clear=False):
                 rich.print(f"[yellow]No shortName nor hardcoded acronym for '{org_funding['fullName']}'")
 
         org_funding["partnershipType"] = o.attrib["type"]
-        org_funding["budget"] = get_cost_from_organization(o)
+        org_funding["budget"] = get_cost_from_organization(o, org_funding["fullName"])
         org_funding["partnershipType"] = o.attrib["type"]
 
         partners_funding.append(org_funding)
     data["funding"]["partners"] = partners_funding
     return data
-
-
-if __name__ == "__main__":
-    argparser = ArgumentParser()
-    argparser.add_argument("project_id", type=str, help="Project ID to fetch in CORDIS", default="")
-    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
-                           default="secrets-local.yaml")
-    argparser.add_argument("-e", "--environment", action="store_true", help="Initialize from environment variables")
-    argparser.add_argument("--force", action="store_true", help="skips insert question", default=False)
-    argparser.add_argument("--clear", action="store_true", help="clears all prevoius downloads", default=False)
-
-    args = argparser.parse_args()
-
-    data = get_cordis_metadata(args.project_id)
-    rich.print(json.dumps(data, indent=2))
-
-    if not args.force:
-        rich.print("[cyan]Store this information into database? (yes/on)")
-        response = input()
-        if response != "yes":
-            rich.print("[red]Aborting")
-            exit()
-    else:
-        rich.print("[purple]Ingesting into database (forced with cli arguments)")
-
-    with open(args.secrets) as f:
-        secrets = yaml.safe_load(f)["secrets"]
-        staconf = secrets["sensorthings"]
-
-    if args.environment:
-        mc = init_metadata_collector_env()
-    elif args.secrets:
-        with open(args.secrets) as f:
-            secrets = yaml.safe_load(f)["secrets"]
-            mc = init_metadata_collector(secrets)
-    else:
-        raise ValueError("Metadata API needs to be configured using environment variables or yaml file!")
-
-    rich.print(data)
-    data = assign_orgs_to_project(mc, data)
-    rich.print(data)
-    mc.insert_document("projects", data, update=True)
-
