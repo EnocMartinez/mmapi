@@ -198,9 +198,21 @@ __people = {
         "familyName": {"type": "string"},
         "orcid": {"type": "string"},
         "email": {"type": "string"},
+        "affiliations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "@organizations": {"type": "string"},
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                },
+                "required": ["@organizations", "start"]
+            }
+        },
         "@organizations": {"type": "string"}
     },
-    "required": ["name", "givenName", "familyName", "email", "@organizations"]
+    "required": ["name", "givenName", "familyName", "affiliations"]
 }
 
 __organizations = {

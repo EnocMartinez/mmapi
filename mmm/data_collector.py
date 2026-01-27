@@ -1121,7 +1121,6 @@ class DataCollector(LoggerSuperclass):
         #    3.4 delete temporal files
 
         files = list(df["urls"])  # List of all files to be compressed
-        rich.print(files)
 
         if len(files) < 1:
             raise ValueError(f"No files to be zipped!")
@@ -1158,8 +1157,8 @@ class DataCollector(LoggerSuperclass):
         os.remove("index.csv")
 
         cmd = "#!/bin/bash\n"
-        cmd += "set -o errexit"
-        cmd += "set -o nounset"
+        cmd += "set -o errexit\n"
+        cmd += "set -o nounset\n"
         cmd += "echo 'Auto-generated script from MMAPI, compressing files into a zip file'\n"
         cmd += f"cd {tmp_folder}\n"
         for _, row in df.iterrows():
