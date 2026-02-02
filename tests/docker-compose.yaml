@@ -46,7 +46,7 @@
       ports:
         - 5432:5432
       volumes:
-        - ./tmpdata:/tmp/sta_db_copy/data
+        - /tmp/sta_db_copy/data:/tmp/sta_db_copy/data
       healthcheck:
         test: [ "CMD-SHELL", "pg_isready", "-d", "sensorthings" ]
         interval: 30s
@@ -73,7 +73,7 @@
       ports:
         - 8882:80
       volumes:
-        - /var/tmp/mmapi/volumes/files:/data/files:ro
+        - /opt/files:/data/files:ro
         - ./nginx.conf:/etc/nginx/nginx.conf
 
     erddap:

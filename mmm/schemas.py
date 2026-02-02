@@ -561,7 +561,10 @@ __operations = {
             "type": "array",
             "items": {"type": "string"}
         },
-        "links": __string_list__,
+        "links": {
+            "type": "array",
+            "items": {"type": "string", "format": "uri"}
+        },
         "comment": {"type": "string"}
     },
     "required": ["description", "timeRange", "type", "participants", "@activities", "status"],
@@ -637,6 +640,7 @@ __projects = {
         "title": {"type": "string"},
         "totalBudget": {"type": "number"},
         "type": {"type": "string", "enum": __project_types__},
+        "description":{"type": "string"},
         "active": {"type": "boolean"},
         "dateStart": {"type": "string"},
         "dateEnd": {"type": "string"},
