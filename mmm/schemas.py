@@ -255,6 +255,45 @@ __sensors = {
         "model": __label_definition,
         "manufacturer": __label_definition,
         "contacts": __contacts_with_roles__(__device_roles__),
+        "pictures": {
+            "type": "object",
+            "properties":{
+                "reference": {"type": "string", "definition": "Reference sensor image like manufacturer"},
+                "operational": {"type": "string", "definition": "Picture of the sensor in operation"},
+                "other": {
+                    "type": "array",
+                    "minItems": 0,
+                    "items": {"type": "string"}
+                },
+            },
+            "required": ["reference"]
+        },
+        "documentation": {
+            "type": "object",
+            "properties":{
+                "manual": { "type": "string", "definition": "User manual " },
+                "calibrations": {
+                    "type": "array",
+                    "minItems": 0,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "link": {"type": "string"},
+                            "date": {"type": "string"}
+                        },
+                        "required": ["link", "date"]
+                    }
+                },
+                "other": {
+                    "type": "array",
+                    "minItems": 0,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+            },
+            "required": ["manual", "calibrations"]
+        },
         "variables": {
             "type": "array",
             "items": {
@@ -283,7 +322,7 @@ __sensors = {
         "dataMode": {"type": "string", "enum": ["real-time", "delayed"]},
     },
     "required": ["description", "shortName", "longName", "serialNumber", "instrumentType", "model", "manufacturer",
-                 "processes", "dataMode"]
+                 "processes", "dataMode", "pictures", "documentation"]
 }
 
 
@@ -310,6 +349,27 @@ __stations = {
         "manufacturer": __label_definition,
         "contacts": __contacts_with_roles__(__device_roles__),
         "emsoFacility": {"type": "string"},
+        "pictures": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string", "definition": "Reference platform image like manufacturer"},
+                "operational": {"type": "string", "definition": "Picture of the platform in operation"},
+                "other": {"type": "array",
+                          "minItems": 0,
+                          "items": {"type": "string"}
+                          },
+                "required": ["reference"]
+            }
+        },
+        "documentation": {"type": "object",
+                          "properties": {
+                              "manual": {"type": "string", "definition": "User manual "},
+                              "other": {"type": "array",
+                                        "minItems": 0,
+                                        "items": {"type": "string"}
+                                        }
+                          }
+        },
         "defaults": {
             "type": "object",
             "properties": {
@@ -318,7 +378,7 @@ __stations = {
             "required": ["@programmes"]
         }
     },
-    "required": ["shortName", "longName", "platformType", "contacts", "defaults"]
+    "required": ["shortName", "longName", "platformType", "contacts", "defaults", "pictures"]
 }
 
 # Dataset splitting. For very big files daily files are envisioned, for very low-rate
@@ -628,8 +688,29 @@ __resources = {
         "name": {"type": "string"},
         "description": {"type": "string"},
         "type": {"type": "string", "enum": __resource_type},
+
+        "pictures": {
+            "type": "object",
+            "properties": {
+                "other": {
+                    "type": "array",
+                    "minItems": 0,
+                    "items": {"type": "string"}
+                }
+            }
+        },
+        "documentation": {
+            "type": "object",
+            "properties": {
+                "other": {
+                    "type": "array",
+                    "minItems": 0,
+                    "items": {"type": "string"}
+                }
+            }
+        }
     },
-    "required": ["name", "description", "type"]
+    "required": ["name", "description", "type", "pictures"]
 }
 
 __projects = {

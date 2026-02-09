@@ -12,6 +12,7 @@ created: 30/11/22
 import logging
 import time
 
+import jsonschema
 from numpy.core.defchararray import upper
 
 from mmm.data_sources.postgresql import PgDatabaseConnector
@@ -301,7 +302,11 @@ class MetadataCollector(LoggerSuperclass):
         if collection not in mmm_schemas.keys():
             self.warning(f"WARNING: no schema for '{collection}'")
         else:
-            errors = validate_schema(doc, mmm_schemas[collection], errors=errors)
+            try:
+                errors = validate_schema(doc, mmm_schemas[collection], errors=errors)
+            except jsonschema.exceptions.SchemaError as e:
+                self.error(f"ERROR validating document '{doc['#id']}' with schema '{collection}'")
+                raise e
         if errors:
             for e in errors:
                 self.error(f"{e}")
