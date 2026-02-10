@@ -352,14 +352,21 @@ __stations = {
         "pictures": {
             "type": "object",
             "properties": {
-                "reference": {"type": "string", "definition": "Reference platform image like manufacturer"},
-                "operational": {"type": "string", "definition": "Picture of the platform in operation"},
-                "other": {"type": "array",
-                          "minItems": 0,
-                          "items": {"type": "string"}
-                          },
-                "required": ["reference"]
-            }
+                "reference": {
+                    "type": "string",
+                    "definition": "Reference platform image like manufacturer"
+                },
+                "operational": {
+                    "type": "string",
+                    "definition": "Picture of the platform in operation"
+                },
+                "other": {
+                    "type": "array",
+                    "minItems": 0,
+                    "items": {"type": "string"}
+                }
+            },
+            "required": ["reference"]
         },
         "documentation": {"type": "object",
                           "properties": {
