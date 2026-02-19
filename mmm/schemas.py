@@ -349,7 +349,7 @@ __stations = {
         "manufacturer": __label_definition,
         "contacts": __contacts_with_roles__(__device_roles__),
         "emsoFacility": {"type": "string"},
-        "wmo_number": {"type": "string"},
+        "wmo_number": {"type": "string", "definition": "World Meteorological Organization (WMO) platform number"},
         "pictures": {
             "type": "object",
             "properties": {
@@ -369,14 +369,16 @@ __stations = {
             },
             "required": ["reference"]
         },
-        "documentation": {"type": "object",
-                          "properties": {
-                              "manual": {"type": "string", "definition": "User manual "},
-                              "other": {"type": "array",
-                                        "minItems": 0,
-                                        "items": {"type": "string"}
-                                        }
-                          }
+        "documentation": {
+            "type": "object",
+            "properties": {
+                "manual": {"type": "string", "definition": "User manual "},
+                "other": {
+                    "type": "array",
+                    "minItems": 0,
+                    "items": {"type": "string"}
+                }
+            }
         },
         "defaults": {
             "type": "object",
