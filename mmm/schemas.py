@@ -349,6 +349,7 @@ __stations = {
         "manufacturer": __label_definition,
         "contacts": __contacts_with_roles__(__device_roles__),
         "emsoFacility": {"type": "string"},
+        "wmo_number": {"type": "string"},
         "pictures": {
             "type": "object",
             "properties": {
