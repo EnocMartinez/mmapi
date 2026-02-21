@@ -10,23 +10,22 @@ created: 30/11/22
 """
 import datetime
 import logging
-import json
-
+import socket
+import yaml
+import time
 import emso_metadata_harmonizer.metadata
 import numpy as np
 import pandas as pd
-import rich
+import emso_metadata_harmonizer as emh
+import os
 
 from .darwin_core import DarwinCoreArchive
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
-from .common import run_subprocess, check_url, run_over_ssh, LoggerSuperclass, assert_types, GRN, RST, \
-    assert_type
-from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals
+from .common import check_url, run_over_ssh, LoggerSuperclass, assert_types, GRN, RST, assert_type
+from .data_manipulation import merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
-import os
-import emso_metadata_harmonizer as mh
 from mmm.dataset import DatasetObject
 from mmm.schemas import dataset_exporter_formats, valid_dataset_services
 
@@ -915,17 +914,19 @@ class DataCollector(LoggerSuperclass):
         """
         self.debug("Creating NetCDF dataset")
         station = self.mc.get_document("stations", conf["@stations"])
-        variables = []  # by default all variables will be used
-        if "@variables" in conf.keys():
-            variables = conf["@variables"]
-
         dataframes = []  # list with a dataframe per variable
-        metadata = []    # list of a metadata dict per variable
-
+        metadata = self.metadata_harmonizer_conf(conf)
         for sensor_name in conf["@sensors"]:
+            sensor_name = sensor_name.replace("-", "_")
             self.info(f"Getting {sensor_name} data from {time_start} to {time_end}")
             sensor = self.mc.get_document("sensors", sensor_name)
             df = self.dataframe_from_sta(conf, station, sensor, resource, time_start=time_start, time_end=time_end)
+            df["sensor_id"] = sensor_name
+            df["platform_id"] = station["#id"].replace("-", "_")
+            for varname in df.columns:
+                if varname.endswith("_STD"):
+                    del df[varname]
+
             if df.empty:
                 self.debug(f"no data for {sensor['#id']}  from {time_start} to {time_end}")
                 tstart = None
@@ -935,9 +936,7 @@ class DataCollector(LoggerSuperclass):
                 tstart = pd.Timestamp(df.index.values[0])
                 tend = pd.Timestamp(df.index.values[-1])
                 dataframes.append(df)
-                # Get the real-time start/time end
-                m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=tstart, tend=tend)
-                metadata.append(m)
+
 
         if all([df.empty for df in dataframes]):
             self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
@@ -947,6 +946,7 @@ class DataCollector(LoggerSuperclass):
         filename = self.dataset_filename(conf, "netcdf", time_start, time_end)
         self.info("Calling NetCDF wrapper...")
         filename = self.call_dataset_generator(conf, dataframes, metadata, output=filename)
+
         self.info(f"Dataset {filename} generated!")
         return filename, False
 
@@ -988,7 +988,7 @@ class DataCollector(LoggerSuperclass):
         return filename, False
 
 
-    def     csv_from_sta(self, conf, resource, time_start: pd.Timestamp, time_end: pd.Timestamp):
+    def csv_from_sta(self, conf, resource, time_start: pd.Timestamp, time_end: pd.Timestamp):
         """
         Generates a CSV file from a SensorThings Database
         """
@@ -1138,6 +1138,15 @@ class DataCollector(LoggerSuperclass):
 
         df["files"] = dst_files
 
+        # If fileserver is localhost and file paths are relative, convert them to absolute
+        if self.fileserver.host == "localhost" or self.fileserver.host == socket.gethostname():
+            if not df["src_files"].values[0].startswith("/"):
+                self.info("Converting relative file paths to absolute ones before zipping files")
+                df["src_files"] = [os.path.abspath(f) for f in df["src_files"]]
+
+
+
+
         dfcsv = df.copy()
         dfcsv = dfcsv
         del dfcsv["src_files"]
@@ -1153,9 +1162,9 @@ class DataCollector(LoggerSuperclass):
             run_over_ssh(self.fileserver.host, f"mkdir -p {tmp_folder}/{sensor}")
         # Send index.csv file
         self.fileserver.send_file(tmp_folder, "index.csv", indexed=False)
+        os.remove("index.csv")  # remove local index.csv
 
-        os.remove("index.csv")
-
+        #======== Creating Bash script to create zip remotely ========#
         cmd = "#!/bin/bash\n"
         cmd += "set -o errexit\n"
         cmd += "set -o nounset\n"
@@ -1172,15 +1181,14 @@ class DataCollector(LoggerSuperclass):
         cmd += f"rm {tmp_folder}/{script_name}\n"
         cmd += f"rmdir {tmp_folder}\n"
 
-        self.info(f"Creating script {script_name}")
         with open(script_name, "w") as f:
             f.write(cmd)  # write the command to the script
         os.chmod(script_name, 0o775)
 
-        self.info(f"Delivering script...")
+        self.debug(f"Delivering script...")
         script_dest = os.path.join(f"{tmp_folder}")
         self.fileserver.send_file(script_dest, script_name, indexed=False)
-        self.info(f"Creating zip file with {len(files)} files, this may take a while...")
+        self.info(f"Running script to create zip file with {len(files)} files, this may take a while...")
         # Run the script!
         run_over_ssh(self.fileserver.host, script_dest + "/" + script_name, fail_exit=True)
 
@@ -1214,10 +1222,11 @@ class DataCollector(LoggerSuperclass):
         os.remove(script_name)
         return filename, delivered
 
-    def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list,
-                                 default_data_mode="real-time", os_data_type="OceanSITES time-series data",
-                                 tstart: pd.Timestamp = None, tend: pd.Timestamp = None) -> dict:
+
+    def metadata_harmonizer_conf(self, dataset, tstart: pd.Timestamp = None, tend: pd.Timestamp = None,
+                                 default_data_mode="delayed") -> dict:
         """
+
         This method returns the configuration required by the Metadata Harmonizer tool from the Metadata DB
         :param dataset: sensor dict from Metadata DB database
         :param sensor: sensor dict from Metadata DB database
@@ -1232,15 +1241,30 @@ class DataCollector(LoggerSuperclass):
         if tend:
             assert_type(tend, pd.Timestamp)
 
+        variable_ids = []
+        sensors = [self.mc.get_document("sensors", sensor_id) for sensor_id in dataset["@sensors"]]
+        for sensor in sensors:
+            for variable in sensor["variables"]:
+                if variable["@variables"] not in variable_ids:
+                    variable_ids.append(variable["@variables"])
 
-        if not variable_ids:  # By default, use ALL variables
-            variable_ids = [dic["@variables"] for dic in sensor["variables"]]
+        # Now make sure that variables have the same units across sensors
+        variable_units = {var_id: [] for var_id in variable_ids}
+        for variable_id in variable_ids:
+            for sensor in sensors:
+                for sensor_var in sensor["variables"]:
+                    if sensor_var["@variables"] == variable_id:
+                        variable_units[variable_id].append(sensor_var["@units"])
 
-        variables = [self.mc.get_document("variables", v) for v in variable_ids]
+        for var, units in variable_units.items():
+            assert len(np.unique(units)) == 1, f"Variables do not have consistent units! variable={var} units={units}"
+
+        station = self.mc.get_document("stations", dataset["@stations"])
 
         # Get minimum info (PI and owner)
         pi, _ = self.mc.get_contact_by_role(dataset, "ProjectLeader")
         owner, _ = self.mc.get_contact_by_role(station, "owner")
+        institution_str = owner["acronym"] + " - " + owner["fullName"]
 
         # Put all people involved in an array
         people = []
@@ -1261,32 +1285,67 @@ class DataCollector(LoggerSuperclass):
                 project = self.mc.get_document("projects", project_id)
                 project_names.append(project["acronym"])
                 project_codes.append(project["funding"]["grantId"])
+
         # Get the OceanSITES Data Mode
         data_mode = default_data_mode
         if "dataMode" in dataset.keys():
             data_mode = dataset["dataMode"]
         data_mode_dict = {"real-time": "R", "delayed": "D", "mixed": "M", "provisional": "P"}
         dm = data_mode_dict[data_mode]
-        # global attributes
-        gl = {
-            "*title": dataset["title"],
-            "*summary": dataset["summary"],
-            "*institution_edmo_code": owner["EDMO"].split("/")[-1],  # just the code, not the full URL
-            "$emso_facility": "None",
-            "~network": "None",
-            "*source": station["platformType"]["label"],
-            "$data_type": os_data_type,
-            "$data_mode": dm,
-            "*principal_investigator": pi["name"],
-            "*principal_investigator_email": pi["email"],
-            "funding_project_names": project_names,
-            "funding_project_codes": project_codes
+
+        meta = {
+            "global": {
+                "title": dataset["title"],
+                "summary": dataset["summary"],
+                "Conventions": "OceanSITES EMSO CF-1.8",
+                "institution": institution_str,
+                "institution_edmo_code": owner["EDMO"],
+                "institution_ror_uri": owner["ROR"],
+                "update_interval": "void",
+                "emso_site_name": station["longName"],
+                "emso_regional_facility_name": station["emsoFacility"],
+                "source": station["platformType"]["label"],
+                "data_type": "OceanSITES profile data",
+                "format_version": "1.4",
+                "network": "EMSO",
+                "data_mode": dm,
+                "projects": "",
+                "project_codes": "",
+                "principal_investigator": pi["name"],
+                "principal_investigator_email": pi["email"],
+                "license": "CC-BY-4.0",
+                "contributors": people,
+                "contributor_types": roles,
+            },
+            "platforms": {},
+            "sensors": {},
+            "variables": {}
         }
 
-        if "emsoFacility" in station.keys():
-            gl["$emso_facility"] = station["emsoFacility"]
-            if station["emsoFacility"] != "None":
-                gl["~network"] = "EMSO"
+        try:
+            meta["global"]["emso_regional_facility_name"] = station["oso"]["regionalFacility"]["label"]
+        except KeyError:
+            self.warning("Could not get oso/regionalFacility/label")
+
+        try:
+            meta["global"]["emso_site_name"] = station["oso"]["site"]["label"]
+        except KeyError:
+            self.warning("Could not get oso/site/label")
+
+        for sensor in sensors:
+            sensor_id = sensor["#id"].replace("-", "_")
+            self.warning(f"Assuming sensor '{sensor_id}' is mounted_on_seafloor_structure")
+            self.warning(f"Assuming sensor '{sensor_id}' is orientation is updwards")
+
+            meta["sensors"][sensor_id] = {
+                "long_name": sensor["longName"],
+                "sensor_serial_number": sensor["serialNumber"],
+                "sensor_mount": "mounted_on_seafloor_structure",
+                "sensor_orientation": "upward",
+                "sdn_instrument_uri": sensor["model"]["definition"],
+                "sensor_manufacturer_uri": sensor["manufacturer"]["definition"],
+                "sensor_type_uri": sensor["instrumentType"]["definition"]
+            }
 
         # Create dictionary where var_id is the key and the value is the units doc
         units = {}
@@ -1298,45 +1357,41 @@ class DataCollector(LoggerSuperclass):
                     found = True
             if not found:
                 raise LookupError(f"variable {var_id} not found in sensor {sensor['#id']}!")
-        var_metadata = {}
-        for variable in variables:
-            var_id = variable["#id"]
-            var_metadata[var_id] = {
-                "*long_name": variable["description"],
-                "*sdn_parameter_uri": variable["definition"],
-                "~sdn_uom_uri": units[var_id]["definition"],
-                "~standard_name": variable["standard_name"],
+        for variable_id, units in units.items():
+            variable = self.mc.get_document("variables", variable_id)
+            varname = variable_id.replace("-", "_").replace(" ", "_")
+            meta["variables"][varname] = {
+                "long_name": variable["description"],
+                "sdn_parameter_uri": variable["definition"],
+                "sdn_uom_uri": units["definition"],
+                "standard_name": variable["standard_name"],
             }
-        sensor_metadata = {
-            "*sensor_model_uri": sensor["model"]["definition"],
-            "*sensor_serial_number": sensor["serialNumber"],
-            "$sensor_mount": "mounted_on_fixed_structure",
-            "$sensor_orientation": "upward"
-        }
 
-        unknown = "http://vocab.nerc.ac.uk/collection/L22/current/TOOLZZZ/"
-        if not sensor_metadata["*sensor_model_uri"]:
-            self.warning("Sensor model not defined! setting to unknown (SDN::L22:TOOLZZZ")
-            sensor_metadata["*sensor_model_uri"] = unknown
-
+        platform = self.mc.get_document("stations", dataset["@stations"])
+        platform_name = station["#id"].replace("-", "_").replace(" ", "_")
+        self.warning(f"Assuming that station '{platform['#id']}' is fixed and has lat,lon,depth")
         latitude, longitude, depth = self.mc.get_station_position(station["#id"], tstart)
-        coordinates = {
+
+        meta["platforms"][platform_name] = {
+            "long_name": platform["longName"],
+            "platform_type_name": platform["platformType"]["label"],
+            "platform_type_uri": platform["platformType"]["definition"],
+            "platform_reference": platform["platformType"]["definition"],
+
             "depth": depth,
             "latitude": latitude,
             "longitude": longitude
         }
+        # Fill optional arguments
+        optional_args = {"wmo_number": "wmo_platform_code"}
+        for key, value in optional_args.items():
+            if key in station.items() and station[key]:
+                meta["platforms"][platform_name][key] = station[value]
 
-        # Now build to document
-        d = {
-            "global": gl,
-            "variables": var_metadata,
-            "sensor": sensor_metadata,
-            "coordinates": coordinates
-        }
-        return d
+        return meta
 
 
-    def call_dataset_generator(self, conf: dict, dataframes: list, metadata: list, output="output.nc"):
+    def call_dataset_generator(self, conf: dict, dataframes: list, metadata: dict, output="output.nc"):
         """
         Dump dataframes and metadata to temporal files and calls the datasets generator
         :param dataframes:
@@ -1344,7 +1399,11 @@ class DataCollector(LoggerSuperclass):
         :param output:
         :return:
         """
-        assert (len(dataframes) == len(metadata))
+        assert_type(dataframes, list)
+        [assert_type(df, pd.DataFrame) for df in dataframes]
+        assert_type(metadata, dict)
+        assert_type(output, str)
+
         # The metadata expander handles special cases where the variables listed do not math with the data columns,
         # like AI-produced data for object detections.
         metadata_expander = {
@@ -1354,20 +1413,21 @@ class DataCollector(LoggerSuperclass):
 
         if not self.emso:
             self.emso = emso_metadata_harmonizer.metadata.EmsoMetadata()
-        dataframes = [df.reset_index() for df in dataframes]
+        # dataframes = [df.reset_index() for df in dataframes]
+        data_files = []
+        for i, df in enumerate(dataframes):
+            f = f"data_{i:02d}.csv"
+            df.to_csv(f)
+            data_files.append(f)
 
+        meta_file = f"meta_{time.time()}.yaml"
+        with open(meta_file, "w") as f:
+            yaml.dump(metadata, f)
 
-        for i, (meta, df) in enumerate(zip(metadata, dataframes)):
-            # Expand metadata according to the metadata_expander rules
-            for varname, handler in metadata_expander.items():
-                if varname in meta["variables"].keys():
-                    meta = handler(conf, meta, df)
-
-            df.to_csv(f"data_{i:02d}.csv")
-            with open(f"meta_{i:02d}.json", "w") as f:
-                json.dump(meta, f, indent=4)
-
-        mh.generate_dataset(dataframes, metadata, output=output, emso_metadata=self.emso)
+        emh.generate_dataset(data_files, [meta_file], log=self.log, output=output)
+        for f in data_files:
+            os.remove(f)
+        os.remove(meta_file)
         return output
 
 

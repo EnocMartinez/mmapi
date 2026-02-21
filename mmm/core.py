@@ -11,15 +11,15 @@ created: 27/10/23
 import logging
 import pandas as pd
 from mmm import MetadataCollector, CkanClient, SensorThingsApiDB, DataCollector, init_metadata_collector
-import rich
-from mmm.common import load_fields_from_dict, YEL, RST
+import numpy as np
+
+from mmm.common import load_fields_from_dict
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
 from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream, \
     HistoricalLocation, set_sta_basic_auth, init_sta_cache
 from mmm.metadata_collector import get_station_coordinates, get_station_history, get_sensor_deployments
 from mmm.processes import average_process, inference_process
 from mmm.schemas import mmapi_data_types
-import numpy as np
 
 
 def get_properties(doc: dict, properties: list) -> dict:
@@ -82,7 +82,7 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, log: log
                 # created, updated or ignored (if it already exists)
                 ckan.organization_create(organization_id, name, title, extras=extras, image_url=image_url)
             else:
-                rich.print(f"[yellow]ignoring private organization {name}...")
+                log.warning(f"ignoring private organization {name}...")
 
     # CKAN Projects
     log.info("Propagating groups to CKAN")
@@ -117,7 +117,7 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, log: log
         for doc in mc.get_documents("datasets"):
             name = doc["#id"]
             if datasets and name not in datasets:
-                rich.print(f"[grey42]skipping dataset {name}")
+                log.debug(f"[grey42]skipping dataset {name}")
                 continue
             dataset_id = name.lower()
             package_name = dataset_id
@@ -201,13 +201,14 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, log: log
                                   groups=groups)
 
 
-def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url, update=True, auth=()):
+def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url, update=True, auth=(), verbose=False):
     """
     Propagates info at MetadataCollctor the SensorThings API
     """
     assert (type(dc) is DataCollector)
     assert (type(collections) is list)
     mc = dc.mc
+    log = dc.log
     if auth:
         set_sta_basic_auth(auth[0], auth[1])
 
@@ -235,7 +236,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
             programme["description"],
             programme["geoJsonFeature"]
         )
-        foi.register(url, update=update, verbose=True)
+        foi.register(url, update=update, verbose=verbose)
         fois[programme["#id"]] = foi.id
 
     sensors = mc.get_documents("sensors")
@@ -250,7 +251,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                 for key, value in doc["properties"].items():
                     properties[key] = doc["properties"][key]
             s = Sensor(name, description, metadata="", properties=properties)
-            s.register(url, update=update, verbose=True)
+            s.register(url, update=update, verbose=verbose)
             sensor_ids[sensor_id] = s.id
 
     if "variables" in collections:
@@ -263,7 +264,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                 "standard_name": doc["standard_name"]
             }
             o = ObservedProperty(name, description, definition, properties=prop)
-            o.register(url, update=update, verbose=True)
+            o.register(url, update=update, verbose=verbose)
             obs_props_ids[name] = o.id
 
     if "stations" in collections:
@@ -277,7 +278,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
             # Register Thing without location
             description = doc["longName"]
             t = Thing(name, description, properties=prop, locations=[])
-            t.register(url, update=update, verbose=True)
+            t.register(url, update=update, verbose=verbose)
             things_ids[name] = t.id
 
             # Now process any HistoricalLocations to add all the
@@ -290,16 +291,16 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                 loc_description = dep["description"]
                 location = Location(loc_name, loc_description, lat, lon, depth, things=[])
 
-                location.register(url, update=update, verbose=True)
+                location.register(url, update=update, verbose=verbose)
                 histloc = HistoricalLocation(dep["time"], location, t)
-                histloc.register(url, verbose=True, update=update)
+                histloc.register(url, verbose=verbose, update=update)
 
     for sensor in sensors:
-        rich.print(f"[green]Creating Datastreams for sensor {sensor['#id']}")
+        dc.log.info(f"Creating Datastreams for sensor {sensor['#id']}")
         sensor_name = sensor["#id"]
         sensor_deployments = get_sensor_deployments(mc, sensor["#id"])
         if not sensor_deployments:
-            rich.print(f"[yellow]WARNING: no deployments for sensor '{sensor_name}'")
+            log.info(f" no deployments for sensor '{sensor_name}'")
             continue
         if len(sensor_deployments) < 1:
             raise ValueError(f"Sensor {sensor['#id']} does not have a deployment!")
@@ -308,11 +309,11 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
             station = deployment["station"]
             deployment_time = deployment["start"]
             if station in stations_processed:
-                rich.print(f"[yellow]Skipping station {station}")
+                log.info(f"Skipping station {station}")
                 continue  # already processed for this sensor
             else:
                 stations_processed.append(station)
-            rich.print(f"[orange1]Generating Datastreams for sensor={sensor_name} in station={station}")
+            log.info(f"Generating Datastreams for sensor={sensor_name} in station={station}")
             # Create full_data datastreams!
             for var in sensor["variables"]:
                 varname = var["@variables"]
@@ -343,7 +344,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                         }
 
                     ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
-                    ds.register(url, update=update, verbose=True)
+                    ds.register(url, update=update, verbose=verbose)
 
                 elif data_type == "profiles":  # creating profile data
                     ds_name = f"{station}:{sensor_name}:{varname}:{data_type}:full"
@@ -364,8 +365,8 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                         }
 
                     ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
-                    rich.print(f"[cyan]Registering Datastream {ds_name}")
-                    ds.register(url, update=update, verbose=True)
+                    dc.info("Registering Datastream {ds_name}")
+                    ds.register(url, update=update, verbose=verbose)
 
                 elif var["dataType"] == "files":
                     ds_name = f"{station}:{sensor_name}:{varname}:{data_type}"
@@ -382,7 +383,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
 
                     ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties,
                                     observation_type="OM_Observation")
-                    ds.register(url, update=update, verbose=True)
+                    ds.register(url, update=update, verbose=verbose)
                 elif var["dataType"] == "detections":
                     # The process doing the detection should register this variable
                     pass
@@ -405,9 +406,9 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
 
                 elif process["type"] == "json":
                     inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id,
-                                      fois[station_doc["defaults"]["@programmes"]], url, update=True)
+                                      fois[station_doc["defaults"]["@programmes"]], url, dc.log, update=True)
                 else:
-                    rich.print(f"[red]ERROR: process type not implemented '{process['type']}'")
+                    log.error(f"ERROR: process type not implemented '{process['type']}'")
                     exit(-1)
 
 
@@ -418,20 +419,23 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
 
     foi_id: default FeatureOfInterest
     """
-    rich.print("[purple]==== Bulk load Data ====")
-    rich.print(f"    filename={filename}")
-    rich.print(f"    sensor={sensor_name}")
-    rich.print(f"    station={station_name}")
-    rich.print(f"    dataType={data_type}")
-    rich.print(f"    average={average}")
+    log = logging.getLogger()
+    log.info("==== Bulk load Data ====")
+    log.info(f"    filename={filename}")
+    log.info(f"    sensor={sensor_name}")
+    log.info(f"    station={station_name}")
+    log.info(f"    dataType={data_type}")
+    log.info(f"    average={average}")
     assert data_type in mmapi_data_types, f"data_type={data_type} not valid!"
+
+    log = logging.getLogger()
 
     psql_conf = secrets["sensorthings"]
 
     if filename.endswith(".csv"):
         df = open_csv(filename)
     else:
-        rich.print(f"[red]extension {filename.split('.')[-1]} not recognized")
+        log.error(f"extension {filename.split('.')[-1]} not recognized")
         raise ValueError("Invalid extension")
 
     if df.empty:
@@ -459,7 +463,7 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
                 # we already have a qc column
                 continue
             else:
-                rich.print(f"[yellow]Forcing QC=2 for {var}")
+                log.info(f"Forcing QC=2 for {var}")
                 df[var + "_QC"] = 2
 
     if data_type not in ["profiles", "detections"]:
@@ -480,7 +484,7 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
             df = df.rename(columns={col: col.replace("_qc", "_QC")})
 
     db = SensorThingsApiDB(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
-                                 psql_conf["password"], logging.getLogger(), timescaledb=True)
+                                 psql_conf["password"], log, timescaledb=True)
     mc = init_metadata_collector(secrets, log=db.logger)
     tstart = df.index.min()
     tend = df.index.max()
@@ -488,7 +492,7 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
         tstart = tstart.tz_localize("utc")
     if tend.tz is None:
         tend = tend.tz_localize("utc")
-    rich.print("Timestamps ", tstart, tend)
+    log.info("Timestamps ", tstart, tend)
 
     if not station_name:
         deployments = mc.get_sensor_deployments(sensor_name, interval=(tstart, tend))
@@ -516,8 +520,6 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
                 row["variable_name"]: row["datastream_id"] for _, row in datastreams_conf.iterrows()
             }
             df = drop_duplicated_indexes(df)
-            rich.print(df)
-            rich.print(datastreams)
             db.inject_to_timeseries(df, datastreams, tmp_folder=tmp_folder, usecs=usecs)
 
         else:  # averaged timeseries

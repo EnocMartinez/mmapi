@@ -48,13 +48,16 @@ def run_metadata_api(secrets: str|dict,  log, mc):
         port = 8080
     else:
         port = secrets["mmapi"]["port"]
-    print("Available endpoints:")
+    log.info("Available endpoints:")
     for rule in app.url_map.iter_rules():
-        print(f"{rule.endpoint}: {rule.rule} [{', '.join(rule.methods)}]")
+        log.info(f"    {rule.endpoint}: {rule.rule} [{', '.join(rule.methods)}]")
 
-    app.config["BASIC_AUTH_USERNAME"] = secrets["mmapi"]["basic_auth_user"]
-    app.config["BASIC_AUTH_PASSWORD"] = secrets["mmapi"]["basic_auth_user"]
-    app.config['BASIC_AUTH_FORCE'] = True  # Require auth for all routes
+    if "basic_auth_user" in secrets["mmapi"].keys() and "basic_auth_password" in secrets["mmapi"].keys():
+        app.config["BASIC_AUTH_USERNAME"] = secrets["mmapi"]["basic_auth_user"]
+        app.config["BASIC_AUTH_PASSWORD"] = secrets["mmapi"]["basic_auth_password"]
+        app.config['BASIC_AUTH_FORCE'] = True
+    else:
+        app.config['BASIC_AUTH_FORCE'] = False  # Require auth for all routes
 
     app.run(host="0.0.0.0", port=port, debug=False)
     return app
@@ -358,3 +361,4 @@ if __name__ == "__main__":
     log = setup_log("Metadata API")
     mc = init_metadata_collector(secrets, log=log)
     run_metadata_api(secrets,  log, mc)
+

@@ -10,10 +10,7 @@ created: 21/9/23
 
 import os
 import logging
-import urllib
-from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
-
 import jsonschema
 import pandas as pd
 import rich

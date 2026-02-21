@@ -507,7 +507,7 @@ def generic_query(path):
 @app.route(f'{service_root}', methods=['GET'])
 @conditional_basicauth()
 def generic():
-    rich.print("[purple]Regular query, forward to SensorThings API")
+
     text, code = get_sta_request(request)
     opts = process_sensorthings_options(request.args.to_dict())
     try:
@@ -838,12 +838,10 @@ def add_cors_headers(response):
 def run_sta_timeseries_api(env_file="", log=None, port=5000):
     if not log:
         log = setup_log("STA-TS")
-    log.setLevel(logging.DEBUG)
     app.log = LoggerSuperclass(log, "STA-TS", colour=CYN)
 
     if env_file:
         # override os.environ with file enironment vars
-        rich.print(f"[purple]loading {env_file}")
         environ = dotenv.dotenv_values(env_file)
     else:
         environ = os.environ
@@ -866,11 +864,6 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
     db_password = environ["STA_DB_PASSWORD"]
     db_host = environ["STA_DB_HOST"]
     app.service_url = environ["STA_TS_ROOT_URL"]
-
-    print(f"--> db_user: {db_user}")
-    print(f"--> db_password: {db_password}")
-    print(f"--> db_host: {db_host}")
-
 
     app.sta_base_url = environ["STA_BASE_URL"]  # URL to get SensorThings Data
     app.sta_get_url = environ["STA_URL_GET"]

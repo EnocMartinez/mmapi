@@ -9,10 +9,10 @@ created: 27/5/24
 """
 import logging
 import shutil
-from argparse import ArgumentParser
 import unittest
 import os
 import sys
+
 import rich
 from threading import Thread
 import yaml
@@ -23,33 +23,39 @@ import pandas as pd
 import json
 import psycopg2
 from PIL import Image, ImageDraw
+import traceback
+import dotenv
 
-try:
-    from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_metadata_to_ckan, \
-        CkanClient, get_station_deployments
-    from mmm.common import  download_file
-except ModuleNotFoundError:
-    # Get the directory of the current script
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    # Get the parent directory (project root)
-    parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# Get the parent directory (project root)
+parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 
-    # Add the parent directory to the sys.path
-    sys.path.insert(0, parent_dir)
+# Add the parent directory to the sys.path
+sys.path.insert(0, parent_dir)
 
-    from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_metadata_to_sensorthings,
-                     bulk_load_data, propagate_metadata_to_ckan, CkanClient, get_station_deployments)
-    from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url, download_file
-    from mmapi import run_metadata_api
-    from sta_timeseries import run_sta_timeseries_api
+from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_metadata_to_sensorthings,
+                 bulk_load_data, propagate_metadata_to_ckan, CkanClient, get_station_deployments)
+from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url, \
+    download_file, WHT
+from mmapi import run_metadata_api
+from sta_timeseries import run_sta_timeseries_api
 
 
+
+redirect_stdout = False
+test_status = []
+test_log_files = []
+
+
+log_level = logging.CRITICAL
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+
+def str_to_bool(value: str) -> bool:
+    return value.strip().lower() == "true"
 
 def get_json(url, params={}):
     r = requests.get(url, params=params)
     if r.status_code > 299:
-        rich.print(f"[red]{url}")
         raise ConnectionError(f"HTTP error='{r.status_code}' at url={url}")
     return json.loads(r.text)
 
@@ -72,16 +78,47 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     @classmethod
     def setUpClass(cls):
 
-        cls.secrets = "secrets-test.yaml"
-        with open(cls.secrets) as f:
-            conf = yaml.safe_load(f)["secrets"]
+        dotenv.load_dotenv("config-tests.env")
+
+        global redirect_stdout
+        redirect_stdout = str_to_bool(os.environ["REDIRECT_STDOUT"])
+
+        # Process environment file
+        cls.timeseries_raw_data = str_to_bool(os.environ["TIMESERIES_RAW_DATA"])
+        cls.timeseries_avg_data = str_to_bool(os.environ["TIMESERIES_AVG_DATA"])
+        cls.profiles_raw_data = str_to_bool(os.environ["PROFILES_RAW_DATA"])
+        cls.profiles_avg_data = str_to_bool(os.environ["PROFILES_AVG_DATA"])
+        cls.detections_raw_data = str_to_bool(os.environ["DETECTIONS_RAW_DATA"])
+        cls.detections_avg_data = str_to_bool(os.environ["DETECTIONS_AVG_DATA"])
+        cls.files_data = str_to_bool(os.environ["FILES_DATA"])
+        cls.json_data = str_to_bool(os.environ["JSON_DATA"])
+
+        cls.fileserver_test = str_to_bool(os.environ["TEST_FILESERVER"])
+        cls.erddap_test = str_to_bool(os.environ["TEST_ERDDAP"])
+        cls.ckan_test = str_to_bool(os.environ["TEST_CKAN"])
 
         log = setup_log("mmapi-test")
-        log.setLevel(logging.INFO)
-        LoggerSuperclass.__init__(cls, log, "test")
+        LoggerSuperclass.__init__(cls, log, "test", colour=WHT)
 
+        log_level = os.environ["LOG_LEVEL"].lower()
+        if log_level == "debug":
+            log.setLevel(logging.DEBUG)
+        elif log_level == "info":
+            log.setLevel(logging.INFO)
+        elif log_level == "warning":
+            log.setLevel(logging.WARNING)
+        elif log_level == "error":
+            log.setLevel(logging.ERROR)
+        elif log_level == "critical":
+            log.setLevel(logging.CRITICAL)
+
+        logging.getLogger('werkzeug').setLevel(logging.ERROR)
+        logging.getLogger('flask').setLevel(logging.ERROR)
+
+        cls.secrets = "secrets-test.yaml"
         with open(cls.secrets) as f:
             cls.conf = yaml.safe_load(f)["secrets"]
+
 
         cls.mmapi_url = cls.conf["mmapi"]["root_url"] + "/mmapi/v1.0"
         cls.sta_url = cls.conf["sensorthings"]["url"]
@@ -112,8 +149,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
                         cls.docker_volumes.append(src)
 
-        cls.local_csv_data = "/var/tmp/mmapi/tmpdata/"
-
         # Make sure that ERDDAP has a clean datasets.xml file
         shutil.copy2("conf/datasets.xml.default", "conf/datasets.xml" )
 
@@ -123,7 +158,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         files = file_list(folder)
         for f in files:
             os.remove(f)
-        dirs = os.listdir(folder)
         dirs = dir_list(folder)
         dirs = sorted(dirs, reverse=True)
         for d in dirs:
@@ -143,7 +177,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         tinit = time.time()
         for service, url in urls.items():
             code = 404
-            rich.print(f"Trying to reach service [cyan]{service}[/cyan]...", end="")
+            log.info(f"Trying to reach service {service}...")
             while code > 300:
                 try:
                     r = requests.get(url, timeout=5)
@@ -151,31 +185,30 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 except requests.exceptions.RequestException:
                     pass
                 if time.time() - tinit > timeout:
-                    rich.print("[red]Timeout error!")
+                    log.error("[red]Timeout error!")
                     raise TimeoutError("Could not connect to service")
 
                 if code < 300:
-                    rich.print(f"[green]success!")
+                    pass
                 else:
                     time.sleep(2)
 
         log.info("Setup CkanClient")
         log.info("Let's do somethings quick and dirty to get the ckan_admin key")
-        os.system("docker exec ckan-test ckan user token add ckan_admin tk1 | tail -n 1 | sed 's/\t//g' >  ckan.key")
+        os.system("docker exec ckan-test ckan user token add ckan_admin tk1 2>/dev/null| tail -n 1 | sed 's/\t//g' >  ckan.key")
         # If success, we should have now the API key in the ckan.key file
         with open("ckan.key") as f:
             ckan_key = f.read().strip()
 
-
         if len(ckan_key) < 10:
             raise ValueError(f"CKAN TOKEN too short! '{ckan_key}'")
-        conf["ckan"]["api_key"] = ckan_key
+        cls.conf["ckan"]["api_key"] = ckan_key
 
         log.info("Setup Metadata Collector...")
-        cls.mc = init_metadata_collector(conf, log=log)
+        cls.mc = init_metadata_collector(cls.conf, log=log)
         cls.log = log
         log.info("Setup Data Collector...")
-        cls.dc = init_data_collector(conf, log, mc=cls.mc)
+        cls.dc = init_data_collector(cls.conf, log, mc=cls.mc)
         cls.stadb = cls.dc.sta
 
         log.info("Clearing Metadata DB database...")
@@ -183,20 +216,23 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         cls.dc.sta.drop_all()
         cls.ckan = cls.dc.ckan
 
-        #cls.ckan = CkanClient(cls.mc, cls.conf["ckan"]["url"], ckan_key)
-
     def test_01_launch_metadata_api(self):
         """Run all tests for MMAPI in a sequential manner"""
+        
         self.log.info("Launching Metadata API in a dedicate thread...")
         #     run_flask_app(secrets, args.environment, log, mc, thread=True)
+
+        sys.stdout = open(os.devnull, 'w')
         mapi = Thread(target=run_metadata_api, args=(self.secrets, self.log, self.mc), daemon=True)
         mapi.start()
-        time.sleep(0.5)
+        time.sleep(0.1)
+        sys.stdout = sys.__stdout__
         d = get_json(self.mmapi_url)
         self.assertIsInstance(d, dict)
 
     def test_02_add_unit(self):
         """adds degC as unit"""
+        
         self.log.info("Inserting several 'units' via API")
         data = {
             "#id": "degrees_celsius",
@@ -216,11 +252,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         url = self.mmapi_url + f"/units/{data['#id']}"
         units = get_json(url)
         self.assertEqual(data["symbol"], units["symbol"])
-
         # Make sure that update works
 
     def test_03_add_via_api(self):
         """adding units and variables via API"""
+        
         d = {
             "#id": "siemens_per_metre",
             "name": "siemens per metre1",
@@ -259,8 +295,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "type": "linear"
         }
         resp = post_json(self.mmapi_url + "/units", d)
-        rich.print(resp)
-
 
         # Make sure that we can access the v3 from the history endpoint
         d3 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/3")
@@ -362,6 +396,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_04_assert_schema(self):
         """trying to insert a non-compliant document to catch the exception"""
+        
         self.info("Inserting an erroneous unit")
         d = {
             "#id": "CNDC2",
@@ -387,6 +422,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_05_add_process(self):
         """Adding average process"""
+        
         avg = {
             "#id": "average",
             "type": "average",
@@ -403,6 +439,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_06_add_organization_people(self):
         """Adding organization process"""
+        
         d = {
             "#id": "upc",
             "fullName": "Universitat Politècnica de Catalunya",
@@ -421,12 +458,14 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "familyName": "Martinez",
             "orcid": "0000-0003-1233-7105",
             "email": "enoc.martinez@upc.edu",
+            "affiliations": [{"@organizations": "upc", "start": "2015-01-01"}],
             "@organizations": "upc"
         }
         self.mc.insert_document("people", d)
 
     def test_07_station(self):
         """Register station and its deployment"""
+        
         d = {
             "#id": "OBSEA",
             "shortName": "OBSEA",
@@ -437,7 +476,21 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "definition": "http://vocab.nerc.ac.uk/collection/L06/current/48/",
                 "label": "mooring"
             },
-            "emsoFacility": "OBSEA",
+            "oso": {
+                "regionalFacility": {
+                    "label": "Balearic Sea",
+                    "definition": ""
+                },
+                "site": {
+                    "label": "OBSEA",
+                    "definition": ""
+                },
+                "platform": {
+                    "label": "OBSEA seabed station",
+                    "definition": ""
+                }
+            },
+            "emsoFacility": "Balearic Sea",
             "contacts": [
                 {
                     "@people": "enoc_martinez",
@@ -450,7 +503,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             ],
             "defaults": {
                 "@programmes": "OBSEA"
+            },
+            "pictures": {
+                "reference": "https://does.not.exist"
             }
+
         }
         self.mc.insert_document("stations", d)
 
@@ -462,6 +519,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "appliedTo": {
                 "@stations": "OBSEA"
             },
+            "status": "done",
             "where": {
                 "position": {
                     "depth": 20.0,
@@ -481,6 +539,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "appliedTo": {
                 "@stations": "OBSEA"
             },
+            "status": "done",
             "where": {
                 "position": {
                     "depth": 20.0,
@@ -493,8 +552,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.mc.insert_document("activities", d)
         self.assertEqual(len(get_station_deployments(self.mc, "OBSEA")), 2)
 
+
     def test_08_add_sensor(self):
         """Adding sensor"""
+        
         d = {
             "#id": "SBE37",
             "description": "SBE37 CTD sensor at OBSEA",
@@ -540,6 +601,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "dataType": "profiles"
                 },
             ],
+            "documentation": {
+                "manual": "https://does.not.exist",
+                "calibrations": []
+            },
             "processes": [
                 {
                     "@processes": "average",
@@ -556,6 +621,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     }
                 }
             ],
+            "pictures": {
+                "reference": "https://does.not.exist"
+            },
             "contacts": [
                 {
                     "@people": "enoc_martinez",
@@ -610,6 +678,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "dataType": "profiles"
                 },
             ],
+            "documentation": {
+                "manual": "https://does.not.exist",
+                "calibrations": []
+            },
+            "pictures": {
+                "reference": "https://does.not.exist"
+            },
             "processes": [
                 {
                     "@processes": "average",
@@ -644,6 +719,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "appliedTo": {
                 "@sensors": "SBE37"
             },
+            "status": "done",
             "where": {
                 "@stations": "OBSEA"
             },
@@ -658,6 +734,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "appliedTo": {
                 "@sensors": "SBE16"
             },
+            "status": "done",
             "where": {
                 "@stations": "OBSEA"
             },
@@ -665,8 +742,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }  # SBE16 deployment
         self.mc.insert_document("activities", d)
 
+
     def test_09_programme(self):
         """insert programme"""
+        
         d = {
             "#id": "OBSEA",
             "description": "Long term monitoring of the OBSEA underwater observatory area",
@@ -742,8 +821,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.mc.insert_document("programmes", d)
         self.mc.insert_document("programmes", d2)
 
+
     def test_10_add_profile_sensor(self):
         """Adding a sensor with profile data"""
+        
         d = {
             "#id": "degrees_north",
             "name": "degrees north",
@@ -829,6 +910,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "label": "AWAC-AST 1 MHz",
                 "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL0897/"
             },
+            "documentation": {
+                "manual": "https://does.not.exist",
+                "calibrations": []
+            },
+            "pictures": {
+                "reference": "https://does.not.exist"
+            },
             "variables": [
                 {
                     "@variables": "CSPD",
@@ -878,6 +966,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "name": "SBE37 deployment",
             "time": "2023-01-01T00:00:00Z",
             "type": "deployment",
+            "status": "done",
             "appliedTo": {
                 "@sensors": "AWAC"
             },
@@ -888,9 +977,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }  # AWAC deployment
         self.mc.insert_document("activities", d)
 
+
     def test_11_add_camera(self):
         """Adding a Camera, that will produce files, inference and detections data"""
-
+        
         d = {
             "#id": "dimensionless",
             "name": "Dimensionless",
@@ -997,6 +1087,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "dataType": "files"
                 }
             ],
+            "documentation": {
+                "manual": "https://does.not.exist",
+                "calibrations": []
+            },
+            "pictures": {
+                "reference": "https://does.not.exist"
+            },
             "processes": [
                 {
                     "@processes": "YOLOv8",
@@ -1025,6 +1122,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "appliedTo": {
                 "@sensors": "IPC608"
             },
+            "status": "done",
             "where": {
                 "@stations": "OBSEA"
             },
@@ -1035,7 +1133,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }  # IPC608 camera deployment
         post_json(self.mmapi_url + "/activities", d)
 
+
     def test_12_add_projects(self):
+        
         d = {
             "#id": "Geo-INQUIRE",
             "type": "european",
@@ -1057,7 +1157,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }
         self.mc.insert_document("projects", d)
 
+
     def test_13_add_datasets(self):
+        
         d = {
             "#id": "obsea_ctd_full",
             "title": "CTD data at OBSEA Underwater Observatory full data",
@@ -1076,7 +1178,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "resources": [{
                         "id": "OBSEA_CTD_full",
                         "host": "localhost",
-                        "path": "./datasets",
+                        "path": "datasets/obsea_ctd_full",
                         "period": "daily",
                         "format": "netcdf",
                         "dataType": "timeseries"
@@ -1085,7 +1187,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "fileserver": {
                     "resources": [{
                         "host": "localhost",
-                        "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
+                        "path": "./fileserver/datasets/obsea_ctd_full",
                         "period": "monthly",
                         "format": "netcdf",
                         "id": "netcdf_dataset",
@@ -1143,7 +1245,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                         "id": "OBSEA_CTD_30min",
                         "host": "localhost",
                         "path": "./datasets",
-                        "period": "daily",
+                        "period": "monthly",
                         "format": "netcdf",
                         "dataType": "timeseries",
                         "averagePeriod": "30min"
@@ -1153,7 +1255,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "resources": [{
                         "id": "netcdf_dataset",
                         "host": "localhost",
-                        "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_30min",
+                        "path": "./fileserver/datasets/obsea_ctd_30min",
                         "period": "yearly",
                         "format": "netcdf",
                         "dataType": "timeseries"
@@ -1204,7 +1306,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "resources": [{
                         "id": "zip_pics",
                         "host": "localhost",
-                        "path": "/var/tmp/mmapi/volumes/files/datasets/IPC608_pics",
+                        "path": "./fileserver/datasets/IPC608_pics",
                         "period": "yearly",
                         "format": "zip",
                         "dataType": "files"
@@ -1256,7 +1358,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     {
                         "id": "darwin_core_dataset",
                         "host": "localhost",
-                        "path": "/var/tmp/mmapi/volumes/files/datasets/biodiversity_datasets",
+                        "path": "./fileserver/datasets/biodiversity_datasets",
                         "period": "yearly",
                         "format": "dwca",
                         "dataType": "json"
@@ -1293,23 +1395,31 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }  # underwater pictures dataset
         self.mc.insert_document("datasets", d)
 
+
     def test_20_propagate_to_sensorthings(self):
         """Propagate metadata from Metadata DB to SensorThingsAPI"""
+        
         propagate_metadata_to_sensorthings(self.dc, [], self.conf["sensorthings"]["url"], update=True)
 
         # Make sure that we have defaultFeatureOfInterest
         self.dc.sta.get_datastream_id("AWAC", "OBSEA", "CDIR", "profiles", "30min")
 
+
     def test_21_launch_sta_timeseries(self):
         """launching sensorthings timeseries API"""
+        sys.stdout = open(os.devnull, 'w')
         mapi = Thread(target=run_sta_timeseries_api, args=["sta-timeseries.env", self.log, 8081], daemon=True)
         mapi.start()
-        time.sleep(0.5)
+        time.sleep(0.1)
+        sys.stdout = sys.__stdout__
         d = get_json(self.sta_ts_url)
         self.assertIsInstance(d, dict)
 
+
     def test_30_ingest_avg_timeseries_data(self):
         """Ingesting average timeseries data using the API"""
+        if not self.timeseries_avg_data:
+            self.skipTest("config skips timeseries data")
         # Generate sine wave values
         frequency = 3
         dates = pd.date_range(start='2024-01-01', end="2024-01-02", freq='30min')
@@ -1384,6 +1494,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_31_bulk_load_raw_timeseries_data(self):
         """Ingesting average timeseries data using the API"""
+        
+        if not self.timeseries_raw_data:
+            self.skipTest("config skips timeseries data")
+
         # Generate sine wave values
         frequency = 3
         dates = pd.date_range(start='2023-01-01', end="2023-03-31", freq='100s')
@@ -1458,6 +1572,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_32_get_raw_timeseries_data_api(self):
         """get timeseries from the API"""
+        if not self.timeseries_raw_data:
+            self.skipTest("config skips timeseries data")
+
         temp_id = self.dc.sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
         url = self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$orderBy=phenomenonTime asc&$top=1"
         data = get_json(url)
@@ -1468,6 +1585,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_33_bulk_load_avg_timeseries_data(self):
         """Bulk load average timeseries data"""
+
+        if not self.timeseries_avg_data:
+            self.skipTest("config skips timeseries data")
         # Generate sine wave values
         frequency = 1
 
@@ -1495,11 +1615,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         start = pd.Timestamp(df["timestamp"].min())
         end = pd.Timestamp(df["timestamp"].max())
 
-        rich.print("==== ALL deployments")
         deployments = self.mc.get_sensor_deployments("SBE37")
-        rich.print(deployments)
 
-        rich.print("==== Interval deployments")
         deployments = self.mc.get_sensor_deployments("SBE37", interval=(start, end))
 
         bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA",
@@ -1515,19 +1632,15 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                         })
 
         results = data["value"]
-        rich.print(f"We should have {len(df)} data opints, got {len(results)}")
-        rich.print(results[0])
-        rich.print(results[-1])
-
-        rich.print("now vector")
-        rich.print(dates[0])
-        rich.print(dates[-1])
         self.assertEqual(len(results), len(tvector))
         self.dc.sta.check_data_integrity()
 
     def test_40_ingest_avg_profile_data(self):
         """Ingesting average timeseries data using the API"""
         # Generate sine wave values
+        if not self.profiles_avg_data:
+            self.skipTest("skip avg profile")
+
         frequency = 1
         dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='12h')
         depths = np.arange(0, 10)
@@ -1573,6 +1686,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_41_ingest_raw_profile_data(self):
         """Ingesting raw profiles data using the API"""
+        if not self.profiles_raw_data:
+            self.skipTest("skip raw profile")
+
         # Generate sine wave values
         frequency = 1
         dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='30min')
@@ -1629,6 +1745,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_42_add_profile_to_ctd(self):
         """Add profile data to a sensor that has both timeseries and profile data"""
+        if not self.profiles_raw_data:
+            self.skipTest("skip avg profile")
+
         frequency = 1
         dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='30min')
         depths = np.arange(0, 10)
@@ -1681,6 +1800,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_50_ingest_pics(self):
         """Create and ingest picture data"""
+        if not self.files_data:
+            self.skipTest("skip files")
 
         width, height = 2000, 2000  # Define the dimensions of the image
 
@@ -1703,7 +1824,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", "files")
         for i in range(len(files)):
             file = files[i]
-            path = fileserver.send_file(f"pictures/IPC608", file)
+            path = fileserver.send_file(f"./fileserver/pictures/IPC608", file)
             foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
             d = {
                 "phenomenonTime": dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -1723,7 +1844,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         # Now download all files
         for result in results:
-            print(result["result"])
             retrieve_url(result["result"], output="image.png", timeout=1, attempts=1)
             os.remove("image.png")
 
@@ -1733,6 +1853,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_51_ingest_pics_inference_detections(self):
         """Creating picture for bulk load pictures, inferences and detections"""
+        if not self.files_data:
+            self.skipTest("skip files")
+
         width, height = 2000, 2000  # Define the dimensions of the image
 
         pictures = []
@@ -1760,7 +1883,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", "files")
         foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
         for i in range(len(pictures)):
-            url = self.dc.fileserver.send_file("pictures/IPC608", pictures[i])
+            url = self.dc.fileserver.send_file("./fileserver/pictures/IPC608", pictures[i])
             data["timestamp"].append(dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'))
             data["results"].append(url)
             data["datastream_id"].append(datastream_id)
@@ -1884,6 +2007,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_61_correct_data_in_hypertables(self):
         """check that only the correct data is stored in the hypertables"""
+        if not (self.timeseries_raw_data or self.profiles_raw_data or self.detections_raw_data):
+            self.skipTest("Skipping hypertables")
+
         sta = self.dc.sta
         lvl = self.log.getEffectiveLevel()
         self.log.setLevel(logging.CRITICAL)
@@ -1937,10 +2063,15 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.dc.sta.exec_query(f"delete from profiles where datastream_id = {detections_id};", fetch=False)
 
     def test_70_propagate_to_ckan(self):
+        if not self.ckan_test:
+            self.skipTest("skip ckan")
         propagate_metadata_to_ckan(self.mc, self.ckan, self.log, collections=[])
 
     def test_71_generate_fileserver_datasets(self):
         """Creating a dataset"""
+        if not self.fileserver_test:
+            self.skipTest("skip fileserver")
+
         os.makedirs("datasets", exist_ok=True)
 
         # Export datasets with the default format (NetCDF)
@@ -1981,6 +2112,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # dwca_dataset = self.dc.generate_dataset("biodiversity_datasets", "fileserver", "2020-01-01", "2020-02-01")
 
     def test_72_generate_ckan_datasets(self):
+        if not self.ckan_test:
+            self.skipTest("skip ckan")
         self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01") # default format
         self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01", fmt="csv") # froce csv
         self.dc.generate_dataset("obsea_ctd_30min", "ckan", "2020-01-01", "2021-02-01")
@@ -1988,26 +2121,38 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_80_config_erddap(self):
         """creates a dataset and upload it to ERDDAP"""
-
-        rich.print("")
-
+        if not self.erddap_test:
+            self.skipTest("skip erddap")
         nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2020-02-01")
+        self.info(f"Got {len(nc_datasets)} datasets")
         for nc_dataset in nc_datasets:
             # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
             data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
-            nc_dataset.configure_erddap("conf/datasets.xml", data_path)
+            nc_dataset.configure_erddap("conf/datasets.xml", "/datasets/obsea_ctd_full")
             nc_dataset.reload_erddap_dataset("erddapData")
-            self.info("Wait 5 seconds for ERDDAP to reload...")
-            time.sleep(5)
+            timeout = 10
+            self.info(f"Wait {timeout} seconds for ERDDAP to reload...")
+
+            dataset_info_url = "http://localhost:8090/erddap/info/" + nc_dataset.erddap_dataset_id + "/index.json"
+            tinit = time.time()
+            erddap_dataset_timeout = 10
+            while not check_url(dataset_info_url):
+                if (time.time() - tinit) > erddap_dataset_timeout:
+                    raise ValueError(f"ERDDAP did not load {nc_dataset.erddap_dataset_id}")
+                self.info(f"Waiting for ERDDAP to load {dataset_info_url}...")
+                time.sleep(0.1)
+
+
             # Now get ERDDAP data!
             erddap_dataset = "mydataset.csv"
             dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
             self.info(f"Downloading dataset from erddap: {dataset_url}")
             download_file(dataset_url, erddap_dataset)
             df = pd.read_csv(erddap_dataset)
-            print(df)
 
     def test_81_config_erddap_with_daily_data(self):
+        if not self.erddap_test:
+            self.skipTest("skip erddap")
         """creates a dataset with daily files and upload it to ERDDAP"""
         nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2022-01-01", "2022-02-01")
         nc_dataset = nc_datasets[0]
@@ -2028,6 +2173,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     @classmethod
     def tearDownClass(cls):
+        print_test_results()
+        for f in test_log_files:
+            os.remove(f)
         os.remove("ckan.key")
         # input("press key to remove docker volumes...")
         # cls.log.info("stopping containers")
@@ -2052,8 +2200,115 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         #     if os.path.isdir(volume):
         #         os.rmdir(volume)
 
+def expand_str(s: str, width: int = 40, fill: str = '.') -> str:
+    return s[:width].ljust(width, fill)
+
+def print_test_results():
+    rich.print("\n========== Test Summary =========")
+    for entry in test_status:
+        test_name, status, elapsed_time = entry
+        status_lower = status.lower()
+        if "error" in status_lower or "fail" in status_lower:
+            row_style = "red"
+        elif "skipped" in status_lower:
+            row_style = "yellow"
+        else:
+            row_style = "green"
+        status = status.ljust(12, " ")
+        time_str = f"{elapsed_time:.0f} ms".rjust(10, " ")
+        rich.print(f"[white]{test_name} [{row_style}] {status} [grey42]{time_str}")
+
+
+class VerboseTestResult(unittest.TestResult):
+    def startTest(self, test):
+        super().startTest(test)
+        self._start_time = time.monotonic()
+        self._log_file = f".{test._testMethodName}.log"
+        self._log_fd = open(self._log_file, 'w')
+        test_log_files.append(self._log_file)
+        test_name = expand_str(test._testMethodName)
+        if redirect_stdout:
+            sys.stdout = self._log_fd
+            sys.stderr = self._log_fd
+
+    def stopTest(self, test):
+        if redirect_stdout:
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+        self._log_fd.close()
+
+    def _restore_stdout(self):
+        if redirect_stdout:
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+            self._log_fd.flush()
+
+    def _elapsed(self):
+        return time.monotonic() - self._start_time
+
+    def _show_log(self):
+        with open(self._log_file, 'r') as f:
+            content = f.read()
+        if content:
+            rich.print(f"\n[grey42]--- captured output ---")
+            print(content)
+            rich.print(f"[grey42]--- end of output ---\n")
+
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        self._restore_stdout()
+        test_name = expand_str(test._testMethodName)
+        elapsed_time = 1000*(self._elapsed())
+        rich.print(f"[white]Test  {test_name} [green] success ✅️ [grey42]({elapsed_time:.0f} ms)")
+        test_status.append([test_name, "🟢 success", elapsed_time])
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        self._restore_stdout()
+        rich.print(test)
+        test_name = expand_str(test._testMethodName)
+        rich.print(f"[white]Test  {test_name} [red] error ❌ [grey42]({1000*(self._elapsed()):.0f} ms)")
+        self._show_log()
+        test_status.append([test_name, "⛔ error", self._elapsed()])
+        rich.print(f"[red]------------- traceback ---------------")
+        rich.print(traceback.format_exc())
+        rich.print(f"[red]---------------------------------------")
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self._restore_stdout()
+        test_name = expand_str(test._testMethodName)
+        rich.print(f"[white]Test  {test_name} [red] failed ✗ [grey42]{1000*(self._elapsed()):.0f} ms")
+        self._show_log()
+        test_status.append([test_name, "🔴 failure", self._elapsed()])
+        rich.print(f"[red]------------- traceback ---------------")
+        rich.print(traceback.format_exc())
+        rich.print(f"[red]---------------------------------------")
+
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        self._restore_stdout()
+        test_name = expand_str(test._testMethodName)
+        rich.print(f"[white]Test  {test_name} [yellow] skipped ⚠️  [grey42]({reason})")
+        test_status.append([test_name, "🟡 skipped", self._elapsed()])
+
+
+class VerboseTestRunner(unittest.TextTestRunner):
+    resultclass = VerboseTestResult
+    def run(self, test):
+        print("\nRunning tests...\n")
+        start = time.monotonic()
+        result = super().run(test)
+        elapsed = time.monotonic() - start
+        print(f"\nFinished in {elapsed:.3f}s — "
+              f"{result.testsRun} tests, "
+              f"{len(result.failures)} failures, "
+              f"{len(result.errors)} errors\n")
+        return result
 
 if __name__ == "__main__":
     init = time.time()
-    unittest.main(failfast=True, verbosity=1)
-    rich.print(f"Total testing time {time.time() - init:.02f} secs")
+    unittest.main(
+        failfast=True,
+        testRunner=VerboseTestRunner(verbosity=0),
+        verbosity=1)

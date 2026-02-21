@@ -14,6 +14,8 @@ mmm_metadata = {
     "required": ["#id", "#version", "#creationDate", "#modificationDate", "#author"]
 }
 
+
+
 # --------- Generic ----------- #
 
 __string_list__ = {
@@ -349,6 +351,16 @@ __stations = {
         "manufacturer": __label_definition,
         "contacts": __contacts_with_roles__(__device_roles__),
         "emsoFacility": {"type": "string"},
+        "oso": {
+            "type": "object",
+            "definition": "OSO ontology is used to describe infrastructure within EMSO and beyond",
+            "properties": {
+                "regionalFacility": __label_definition,
+                "site": __label_definition,
+                "platform": __label_definition
+            },
+            "required": ["regionalFacility", "site", "platform"]
+        },
         "wmo_number": {"type": "string", "definition": "World Meteorological Organization (WMO) platform number"},
         "pictures": {
             "type": "object",

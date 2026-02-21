@@ -311,7 +311,7 @@ class MetadataCollector(LoggerSuperclass):
             for e in errors:
                 self.error(f"{e}")
             if exception:
-                rich.print(doc)
+                self.error(json.dumps(doc, indent=2))
                 raise ValueError(f"Document not valid: {str(errors)}")
             return False  # return false if exception=False
         else:
@@ -863,7 +863,7 @@ class MetadataCollector(LoggerSuperclass):
 
         if type(timestamp) == type(None):
             # If timestamp not specified return the last deployment
-            return df["latitude"].values[0], df["longitude"].values[0], df["depth"].values[0]
+            return float(df["latitude"].values[0]), float(df["longitude"].values[0]), float(df["depth"].values[0])
 
         if timestamp.tz is None:
             timestamp = timestamp.tz_localize("UTC")
@@ -875,7 +875,7 @@ class MetadataCollector(LoggerSuperclass):
         for idx, row in df.iterrows():
             if timestamp >= row["time"].replace(hour=0, minute=0, second=0, microsecond=0):
                 self.debug(f'Found deployement lat={row["latitude"]} lon={row["longitude"]} depth={row["depth"]}')
-                return row["latitude"], row["longitude"], row["depth"]
+                return float(row["latitude"]), float(row["longitude"]), float(row["depth"])
 
         raise LookupError(f"Deployment for station={station_name} before {timestamp} not found, only found={data['time']}")
 

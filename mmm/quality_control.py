@@ -8,7 +8,6 @@ created: 30/07/2024
 """
 
 import time
-
 import pandas as pd
 import rich
 import json

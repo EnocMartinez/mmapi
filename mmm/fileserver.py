@@ -104,9 +104,6 @@ class FileServer(LoggerSuperclass):
         if not dry_run:
             assert os.path.exists(file), "file does not exist!"
 
-        if not is_absolute_path(path):  # add basepath to the relative path
-            path = os.path.join(self.basepath, path)
-
         dest_file = send_file(file, path, self.host, dry_run=dry_run)
 
         if indexed:

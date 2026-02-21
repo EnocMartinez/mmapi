@@ -7,6 +7,8 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 23/3/21
 """
+import logging
+
 import pandas as pd
 import requests
 import json
@@ -380,30 +382,29 @@ class AbstractSensorThings:
         if self.type == "Observation":
             rich.print(f"[red]Can't register observation! use post instead...")
 
+        log = logging.getLogger()
+
         if duplicate:  # check if the element has already been registered
             current = self.check_if_registered(baseurl)
             if current:  # element exists
                 if update:
                     if compare_sta_elements(current, self.data):
-                        if verbose:
-                            rich.print(f'Register {self.type} "{self.name}"...already exists, update not required')
+                        log.debug(f'Register {self.type} "{self.name}"...already exists, update not required')
                         return current
                     else:
-                        if verbose:
-                            rich.print(f'Register {self.type} "{self.name}"...[yellow]updating element')
+                        log.debug(f'Register {self.type} "{self.name}"...[yellow]updating element')
                         return self.patch()
                 else:
-                    if verbose:
-                        rich.print(f'Register {self.type} "{self.name}"...element already exists, skipping')
+                    log.debug(f'Register {self.type} "{self.name}"...element already exists, skipping')
                     return current
 
-        if verbose:
-            rich.print(f'[cyan]Registering {self.type} "{self.name}"...')
+
+        log.debug(f'Registering {self.type} "{self.name}"...')
         try:
             resp = self.post(baseurl, verbose=False, )
         except Exception as e:
-            rich.print(f"[red]Error when inserting {self.type} with name {self.name}")
-            rich.print(self.data)
+            log.error(f"Error when inserting {self.type} with name {self.name}")
+            log.error(json.dumps(self.data, indent=2))
             raise e
 
         self.id = int(resp)
@@ -421,9 +422,7 @@ class AbstractSensorThings:
             check_http_status(http_response)
             registered_elements = json.loads(http_response.text)
             _api_cache[entity_url] = json.loads(http_response.text)
-            rich.print(f"[cyan]----> real API call")
         else:
-            rich.print("[grey42]-----> Using cache")
             registered_elements = _api_cache[entity_url]
 
         for e in registered_elements["value"]:

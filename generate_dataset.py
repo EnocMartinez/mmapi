@@ -63,8 +63,8 @@ def list_datasets(secrets, verbose=False):
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
-    argparser.add_argument("dataset_id", help="Dataset ID", nargs="?", type=str)
-    argparser.add_argument("service", help="Service name (e.g. ERDDAP, CKAN, etc.)", nargs="*", type=str)
+    argparser.add_argument("dataset_id", help="Dataset ID", type=str)
+    argparser.add_argument("services", help="Service name (e.g. ERDDAP, CKAN, etc.)", nargs="+", type=str)
     argparser.add_argument("--current", help="Generate the current file (e.g. current day or current month)", action="store_true")
     argparser.add_argument("--list", help="List registered datasets and exit", action="store_true")
     argparser.add_argument("--local", help="Do not send to destination server", action="store_true")
@@ -90,14 +90,6 @@ if __name__ == "__main__":
     if args.local:
         deliver = False
 
-    if args.list:
-        list_datasets(args.secrets, verbose=args.verbose)
-        exit()
-
-    if not args.dataset_id or not args.service:
-        rich.print("[red]Arguments no valid: dataset_id and service must be defined!")
-        exit(1)
-
     if args.time_range:
         tstart, tend = args.time_range.split("/")
     else:
@@ -106,7 +98,7 @@ if __name__ == "__main__":
 
     log = setup_log("gen_dataset", log_level="info")
 
-    for service in args.service:
+    for service in args.services:
         generate_dataset(args.dataset_id, service, tstart, tend, args.secrets, log, format=args.format,
                          current=args.current, verbose=args.verbose, erddap_config=args.erddap,
                          overwrite=args.overwrite, resources=args.resources, deliver=deliver)

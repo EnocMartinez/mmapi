@@ -12,10 +12,11 @@ created: 19/2/24
 
 from mmm import MetadataCollector
 import rich
-from mmm.common import load_fields_from_dict
+from mmm.common import load_fields_from_dict, assert_type
 from mmm.data_sources.api import Datastream
-from mmm.metadata_collector import get_sensor_deployments, get_sensor_latest_deployment
+from mmm.metadata_collector import get_sensor_deployments
 import numpy as np
+import logging
 
 
 def get_sensor_process_parameters(process_id, sensor)->dict:
@@ -31,15 +32,16 @@ def get_sensor_process_parameters(process_id, sensor)->dict:
     raise LookupError(f"process {process_id} not found in sensor {sensor['name']}")
 
 def inference_process(sensor: dict, process: dict, mc: MetadataCollector, obs_props_ids: dict, sensor_id: int,
-                      thing_id: int, foi_id: int, url: str, update=True):
+                      thing_id: int, foi_id: int, url: str, log: logging.Logger, update=True):
     """
     Registers the Datastreams for Object Detection inference. The output is expected to be an integer number of
     detections.
     """
+    assert_type(log, logging.Logger)
     __required_fields = ["variableNames", "name"]
     for k in __required_fields:
         if k not in process.keys():
-            rich.print(f"[red]ERROR, expected key {k} in inference configuration")
+            log.error(f"[red]ERROR, expected key {k} in inference configuration")
     deployments = get_sensor_deployments(mc, sensor["#id"])
     processed_stations = []
     for dep in deployments:
@@ -49,7 +51,7 @@ def inference_process(sensor: dict, process: dict, mc: MetadataCollector, obs_pr
             # Already processed
             continue
         sensor_name = sensor["#id"]
-        rich.print(f"Registering inference Datastreams for {sensor_name}")
+        log.info(f"Registering inference Datastreams for {sensor_name}")
         variables = mc.get_documents("variables")
         classes = {}  # key taxa name (standard_name),
 

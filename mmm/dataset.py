@@ -119,17 +119,24 @@ class DatasetObject(LoggerSuperclass):
         """
 
         if not self.delivered:
-            self.info("Dataset already delivered!")
+            required_url = False
+            if self.service_name == "fileserver":
+                # fileserver does require an url
+                required_url = True
+            path_or_url = self.exporter.deliver_dataset(self.filename, self.tstart, url_required=required_url)
             self.delivered = True
-            self.url = self.exporter.deliver_dataset(self.filename, self.tstart)
         else:
-            self.url = self.fileserver.path2url(self.filename)
+            path_or_url = self.fileserver.path2url(self.filename)
+            self.info("Dataset already delivered!")
+
+        if path_or_url.startswith("https://") or path_or_url.startswith("http://"):
+            self.url = path_or_url
 
         if register:
             path = self.fileserver.url2path(self.url)
             self.mc.dataset_register(self.resource_id, self.dataset_id, self.tstart_str(), self.tend_str(), self.url, path)
 
-        return self.url
+        return path_or_url
 
     def configure_erddap(self, datasets_xml, dataset_path):
         """
@@ -152,6 +159,7 @@ class DatasetObject(LoggerSuperclass):
             self.erddap_dataset_id = self.dataset_id
 
         # configure erddap using the emso_metadata_harmonizer tool
+        self.info(f"Integrating {self.filename} into {dataset_path}")
         erddap_config(self.filename, self.erddap_dataset_id, dataset_path, datasets_xml_file=datasets_xml)
         self.erddap_configured = True
 
@@ -216,7 +224,7 @@ class DatasetObject(LoggerSuperclass):
 
         while os.path.exists(dataset_hard_flag):
             time.sleep(1)
-            print("waiting for erddap to load the dataset...")
+            self.info("waiting for erddap to load the dataset...")
 
     def __repr__(self):
         """
@@ -282,9 +290,12 @@ class DataExporter(LoggerSuperclass):
         # First, construct the path
         path = self.path  # start with base path
         path = self.generate_path(path, self.period, timestamp)
+        self.info(f"Sending file to {path}")
         if self.fileserver.host == self.host:
+            self.debug(f"Using self.fileserver.send_file")
             result = self.fileserver.send_file(path, filename, indexed=url_required)
         else:
+            self.debug(f"Using standalone send_file")
             result = send_file(filename, path, self.host)
         return result
 

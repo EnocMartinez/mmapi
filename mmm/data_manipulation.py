@@ -8,6 +8,7 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 1/12/23
 """
+import logging
 
 import pandas as pd
 import rich
@@ -26,6 +27,7 @@ def open_csv(csv_file, time_format="", time_range=[], format=False) -> pd.DataFr
     :param time_range: list of two timestamps used to slice the input dataset
     :return: dataframe with the dataset
     """
+    log = logging.getLogger()
     df = pd.read_csv(csv_file)
     if "timestamp" not in df.columns:
         df = df.rename(columns={df.columns[0]: "timestamp"})  # rename first column to timestamp
@@ -53,11 +55,10 @@ def open_csv(csv_file, time_format="", time_range=[], format=False) -> pd.DataFr
                 opened = True
                 break
             except ValueError:
-                rich.print(f"[yellow]Could not parse time with format '{fmt}'")
                 continue
 
         if not opened:
-            raise ValueError("Could not open CSV file!")
+            raise ValueError("Could not open CSV file!, check timestamp formats!")
 
     if format:
         df = df.sort_index(ascending=True)

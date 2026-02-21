@@ -2,13 +2,13 @@ import datetime
 import logging
 import os
 from zipfile import ZipFile
-
 from lxml import etree
 import pandas as pd
+import requests
+
 from mmm import MetadataCollector
 from mmm.common import assert_type, LoggerSuperclass, GRN
 from mmm.xmlutils import get_element, serialize_xml, create_element
-import requests
 
 
 # Darwin Core Event Core + extended Measurement or Fact table (eMoF)
@@ -141,7 +141,7 @@ class DarwinCoreArchive(LoggerSuperclass):
                 "eventID": pic,
                 "parentEventID": camera_event_id,
                 "eventType": "Observation",
-                "eventTime": row["timestamp"].strftime("%Y-%m-%dT%H:%M:%SZ")
+                "eventDate": row["timestamp"].strftime("%Y-%m-%dT%H:%M:%SZ")
             })
 
             for i, res in enumerate(row["json"]):
