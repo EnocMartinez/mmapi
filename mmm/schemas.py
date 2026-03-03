@@ -513,7 +513,13 @@ __datasets = {
     "properties": {
         "title": {"type": "string"},
         "summary": {"type": "string"},
-        "@stations": {"type": "string"},  # only ONE station
+        "@stations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "string"
+            }
+        },
         "@sensors": {
             "type": "array",
             "minItems": 1,

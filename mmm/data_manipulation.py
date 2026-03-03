@@ -783,3 +783,92 @@ def calculate_time_intervals(start_time: pd.Timestamp, end_time: pd.Timestamp, p
         partial_time_start = partial_end_time
 
     return intervals
+
+
+def pivot_dataframe(df, pivot_cols, pivot_on="variable"):
+    try:
+        df = __pivot_dataframe(df, pivot_cols, pivot_on=pivot_on)
+    except ValueError:
+        # if regular pivot did not work, probably we have to pivot taking into account depth columns
+        df = __pivot_dataframe_depth(df, pivot_cols, pivot_on=pivot_on)
+    return df
+
+def __pivot_dataframe(df, pivot_cols, pivot_on="variable"):
+    """
+    Pivot a dataframe on a given column, expanding specified columns per variable.
+
+    Args:
+        df:         Input dataframe
+        pivot_cols: List of columns to pivot, e.g. ['value', 'qc_flag', 'parameters']
+                    The first column in the list is treated as the main value column
+                    (renamed to just the variable name), the rest get a suffix.
+        pivot_on:   Column containing the variable names to pivot on (default: 'variable')
+
+    Returns:
+        Pivoted dataframe with variable-specific columns.
+    """
+
+
+
+    # All columns except pivot_cols and pivot_on become the index
+    index_cols = [c for c in df.columns if c not in pivot_cols + [pivot_on]]
+
+    df_wide = df.pivot(index=index_cols, columns=pivot_on, values=pivot_cols)
+
+    # Flatten multi-level columns: first col in pivot_cols -> var name only, rest -> var_colname
+    def rename_col(top, var):
+        if top == 'value':
+            return var
+        elif top == 'qc_flag':
+            return f"{var}_QC"
+        else:
+            return f"{var}_{top}"  # e.g. temperature_parameters
+
+    df_wide.columns = [rename_col(top, var) for top, var in df_wide.columns]
+    df_wide = df_wide.reset_index()
+    df_wide.columns.name = None
+
+    return df_wide
+
+def __pivot_dataframe_depth(df, pivot_cols, pivot_on="variable", depth_col="depth"):
+    """
+    Pivot a dataframe on a given column, expanding specified columns per variable.
+
+    Args:
+        df:         Input dataframe
+        pivot_cols: List of columns to pivot, e.g. ['value', 'qc_flag', 'parameters']
+                    The first column in the list is treated as the main value column
+                    (renamed to just the variable name), the rest get a suffix.
+        pivot_on:   Column containing the variable names to pivot on (default: 'variable')
+        depth_col:  Name of the depth column (default: 'depth'). If present in df,
+                    it will be included in the index for pivoting.
+
+    Returns:
+        Pivoted dataframe with variable-specific columns.
+    """
+    has_depth = depth_col in df.columns
+
+    # Unique identifiers for pivoting
+    index_cols = ['timestamp', depth_col] if has_depth else ['timestamp']
+
+    df_wide = df.pivot(index=index_cols, columns=pivot_on, values=pivot_cols)
+
+    # Flatten multi-level columns
+    main_col = pivot_cols[0]
+    df_wide.columns = [
+        var if top == main_col else f"{var}_{top}"
+        for top, var in df_wide.columns
+    ]
+
+    df_wide = df_wide.reset_index()
+    df_wide.columns.name = None
+
+    # Merge back extra columns
+    extra_cols = [c for c in df.columns if c not in pivot_cols + [pivot_on] + index_cols]
+    if extra_cols:
+        extra = df[index_cols + extra_cols].drop_duplicates(subset=index_cols)
+        df_wide = df_wide.merge(extra, on=index_cols, how='left')
+
+    df_wide = df_wide.sort_values(index_cols).reset_index(drop=True)
+
+    return df_wide

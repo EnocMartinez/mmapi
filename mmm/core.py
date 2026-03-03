@@ -21,6 +21,8 @@ from mmm.metadata_collector import get_station_coordinates, get_station_history,
 from mmm.processes import average_process, inference_process
 from mmm.schemas import mmapi_data_types
 
+logging.getLogger('emso_metadata_harmonizer').setLevel(logging.ERROR)
+
 
 def get_properties(doc: dict, properties: list) -> dict:
     """
@@ -126,7 +128,8 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, log: log
             sensors = doc["@sensors"]
             # Avoid navigation in sensors
             sensors = [s for s in sensors if not s.endswith("-navigation")]
-            station = mc.get_station(doc["@stations"])
+
+            station = mc.get_station(doc["@stations"][0])
 
             # If we have a timeRange constraint, get the timestamp of the deployment to query the station position
             try:
@@ -140,7 +143,7 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, log: log
             latitude, longitude, depth = get_station_coordinates(mc, station, timestamp=timestamp)
 
             extras = {
-                "station": station["#id"],
+                "stations": ", ".join(doc["@stations"]),
                 "latitude": latitude,
                 "longitude": longitude,
                 "depth": depth,
@@ -225,7 +228,6 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
     fois = {}
 
     init_sta_cache(url)
-
 
     # Convert "programmes" into "FeaturesOfInterest"
     programmes = mc.get_documents("programmes")
@@ -380,7 +382,6 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                         qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
                         properties["qualityControl"] = qc_doc["qartod"]
 
-
                     ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties,
                                     observation_type="OM_Observation")
                     ds.register(url, update=update, verbose=verbose)
@@ -492,7 +493,7 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
         tstart = tstart.tz_localize("utc")
     if tend.tz is None:
         tend = tend.tz_localize("utc")
-    log.info("Timestamps ", tstart, tend)
+    log.info(f"Timestamps {tstart} {tend}")
 
     if not station_name:
         deployments = mc.get_sensor_deployments(sensor_name, interval=(tstart, tend))
@@ -550,7 +551,7 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
         db.inject_to_files(df, tmp_folder=tmp_folder, usecs=usecs)
 
     elif data_type == "json":
-        db.inject_to_json(df, usecs=usecs)
+        db.inject_to_json(df, tmp_folder=tmp_folder, usecs=usecs)
 
     else:
         raise ValueError("This should never happen!")

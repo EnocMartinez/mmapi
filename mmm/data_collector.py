@@ -23,11 +23,12 @@ from .darwin_core import DarwinCoreArchive
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
 from .common import check_url, run_over_ssh, LoggerSuperclass, assert_types, GRN, RST, assert_type
-from .data_manipulation import merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals
+from .data_sources.postgresql import sql_list
+from .data_manipulation import merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals, pivot_dataframe
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
 from mmm.dataset import DatasetObject
-from mmm.schemas import dataset_exporter_formats, valid_dataset_services
+from mmm.schemas import dataset_exporter_formats, valid_dataset_services, mmapi_data_types
 
 
 def init_data_collector(secrets: dict, log: logging.Logger, mc: MetadataCollector = None,
@@ -150,19 +151,18 @@ class DataCollector(LoggerSuperclass):
         data_type, full_data, average_period = self.get_dataset_type(dataset)
 
         sensors = dataset["@sensors"]
-        station = dataset["@stations"]
+        stations = dataset["@stations"]
         # Extract list of variables
         variables = []
         if "@variables" in dataset.keys():
             variables = dataset["@variables"]
 
-        self.debug(f"Getting datastreams for station={station} sensors={sensors} and variables={variables}")
+        self.debug(f"Getting datastreams for station={stations} sensors={sensors} and variables={variables}")
         # Construct the query
-        sensors_str = ",".join([f"'{s}'" for s in sensors])
         q = f"""
         select "ID" from "DATASTREAMS" where
-            "SENSOR_ID" in (select "ID" from "SENSORS" where "NAME" in ({sensors_str}))
-            and "THING_ID" = (select "ID" from "THINGS" where "NAME" = '{station}')
+            "SENSOR_ID" in (select "ID" from "SENSORS" where "NAME" in {sql_list(sensors)})
+            and "THING_ID" = (select "ID" from "THINGS" where "NAME" in {sql_list(stations)})
             and "PROPERTIES"->>'dataType' = '{data_type}'
         """
 
@@ -444,315 +444,232 @@ class DataCollector(LoggerSuperclass):
         obj = DatasetObject(self.mc, self.fileserver, conf, filename, service_name, resource, time_start, time_end, fmt, self.log, delivered=delivered)
         return obj
 
-    def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, resource: dict, time_start: pd.Timestamp,
+    def dataframe_from_sta(self, conf: dict, station_ids: list, sensor_ids: list, resource: dict, time_start: pd.Timestamp,
                            time_end: pd.Timestamp) -> pd.DataFrame:
+        assert_type(station_ids, list)
+        assert_type(sensor_ids, list)
+        [assert_type(s, str) for s in station_ids]
+        [assert_type(s, str) for s in sensor_ids]
         data_type = resource["dataType"]
         if data_type == "timeseries":
-            return self.dataframe_from_sta_timeseries(conf, resource, station, sensor, time_start, time_end)
+            return self.dataframe_from_sta_timeseries(conf, resource, station_ids, sensor_ids, time_start, time_end)
         elif data_type == "detections":
             df = self.dataframe_from_sta_detections(conf, resource, station, sensor, time_start, time_end)
             return df
         elif data_type == "profiles":
-            return self.dataframe_from_sta_profiles(conf, station, sensor, time_start, time_end)
+            return self.dataframe_from_sta_profiles(conf, resource, station_ids, sensor_ids, time_start, time_end)
         elif data_type == "files":
-            return self.dataframe_from_sta_observations(conf,resource,  station, sensor, time_start, time_end)
+            return self.dataframe_from_sta_files(conf,resource,  station, sensor, time_start, time_end)
         elif data_type == "json":
-            return self.dataframe_from_sta_json(conf, station, sensor, time_start, time_end)
+            return self.dataframe_from_sta_json(conf, resource,  station_ids, sensor_ids, time_start, time_end)
         else:
             df = None
             self.error(f"Unimplemented data type {conf['dataType']}", exception=ValueError)
         return df
 
-    def dataframe_from_sta_detections(self, conf: dict, resource: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
+    def dataframe_from_sta_detections(self, conf: dict, resource: dict,station_ids: list, sensor_ids, time_start: pd.Timestamp,
                                       time_end: pd.Timestamp):
         """
         Return all the detections from a sensor
         """
-        sensor_name = sensor["#id"]
-        station_name = station["#id"]
-        self.info(f"dataframe_from_sta_detections station {station_name} sensor {sensor_name}")
-        time_periods = []
-        if "constraints" in conf.keys() and "fieldOfView" in conf["constraints"]:
-            # Process fieldOfView constraint
-            deployments = self.mc.get_sensor_deployments(sensor)
-            # Keep only periods where the camera was looking to the chosen fieldOfView
-            for deployment in deployments:
-                if "fieldOfView" not in deployment.keys():
-                    self.error(f"Deployment has no fieldOfView! sensor={sensor_name} activity_id={deployment['id']}",
-                               exception=ValueError)
-                if conf["constraints"]["fieldOfView"]["@programmes"] == deployment["fieldOfView"]["@programmes"]:
-                    if deployment["end"]:
-                        end = deployment["end"]
-                    else:
-                        end = time_end
-                    time_periods.append((deployment["start"], end))
-                else:
-                    # No deployment with the fieldOfView of interest!
-                    pass
-        else:
-            time_periods = [(time_start, time_end)]
+        raise ValueError("Unimplemented data type detections")
 
-        self.info(f"Sensor {sensor_name} time periods {time_periods}")
+    def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=[], tstart=None, tend=None):
+        """
+        This function returns generic DataFrame with the same columns for all data types. The generic dataframe has the
+        following columns:
+                       timestamp depth     value  qc_flag time_end parameters variable sensor_id platform_id   foi
+0      2023-01-01 00:00:00+00:00  None  1.000000        1     None       None     CNDC     SBE37       OBSEA  None
+1      2023-01-01 00:01:40+00:00  None  1.000000        1     None       None     CNDC     SBE37       OBSEA  None
+2      2023-01-01 00:03:20+00:00  None  1.000000        1     None       None     CNDC     SBE37       OBSEA  None
+
+
+        This dataset needs to be filtered and pivoted inside the data-specific method.
+
+        :param station_ids:
+        :param sensor_ids:
+        :param data_type:
+        :param average:
+        :param fois:
+        :return: dataframe with columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
+        """
         dataframes = []
-        for time_start, time_end in time_periods:
-            model_name = ""
-            self.info(f"Getting detections with sensor={sensor_name} thing={station_name} from {time_start} to {time_end}")
-            try:
-                model_name = conf["constraints"]["@processes"]
-                self.info(f"Using data from AI process {model_name}")
-            except KeyError:
-               self.error("AI process not defined in 'detections' dataset!", exception=ValueError)
+        # assert all incoming data types
+        assert_type(station_ids, list)
+        assert_type(sensor_ids, list)
+        assert_type(sensor_ids, list)
+        assert data_type in mmapi_data_types, f"data type '{data_type}' not valid'"
+        assert_type(fois, list)
+        [assert_type(s, str) for s in station_ids]
+        [assert_type(s, str) for s in sensor_ids]
+        [assert_type(s, str) for s in fois]
+        assert data_type in mmapi_data_types, f"data type '{data_type}' not valid'"
 
-            self.debug(f"getting datastream_id where dataType=json and sensor={sensor_name} and station={station_name}")
-            # First get all the times where we have inferences. Let's assume that we only have one datastream that
-            # matches data_type=json and model_name=<AI model>
-            q = f""" select \"ID\" from \"DATASTREAMS\" 
-                where 
-                    \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
-                    and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
-                    and \"PROPERTIES\"->>'dataType' = 'json'
-                    and \"PROPERTIES\"->>'modelName' = '{model_name}'
-                ;"""
-            try:
-                inference_datastream = self.sta.value_from_query(q)
-            except LookupError:
-                return pd.DataFrame()  # return empty dataframe
+        # Check incompatible arguments
+        if average and data_type in ["files", "json", "detections"]:
+            self.error(f"Average on data type {data_type} unimplemented", exception=ValueError)
 
-            self.debug(f"Pictures datastream_id = {inference_datastream}")
-            df_inf = self.sta.dataframe_from_query(f'''
+        self.info(f"Getting data for sensors={sensor_ids}, stations={station_ids}, data_type={data_type}, average={average}, fois={fois}")
+
+        # Step 1: Get the list of datastreams to query
+        query = f"""
+            select
+                "ID"                
+            from "DATASTREAMS"
+            where
+                "SENSOR_ID" in (select "ID" from "SENSORS" WHERE "NAME" in {sql_list(sensor_ids)})
+                and "THING_ID" in (select "ID" from "THINGS" WHERE "NAME" in {sql_list(station_ids)})
+                and "PROPERTIES"->>'dataType' = '{data_type}'
+        """
+        # Averaged data needs to be filtered by averagePeriod
+        if average:
+            query += f""" and "PROPERTIES"->>'averagePeriod' = '{average}'"""
+        # In timeseries/profiles/detections we need to be sure to select only fullData
+        elif data_type in ["timeseries", "profiles", "detections"]:
+            query += f"""     and ("PROPERTIES"->>'fullData')::boolean = True """
+
+        query += ";"
+        datastream_ids = self.sta.list_from_query(query)
+        self.info(f"Found {len(datastream_ids)} datastreams")
+
+        # Step 2: Query for data, all queries should return ALL possible column types, regardless if they are empty
+        # timestamp, time_end, depth, value, qc_flag, parameters, variable, sensor_id, platform_id, foi
+        iso_format = f"%Y-%m-%dT%H:%M:%SZ"
+
+        # If averaged or files/json we need to query OBSERVATIONS table
+        if data_type in ["files", "json"] or average:
+            self.debug("querying the OBSERVATIONS table")
+
+            # First, select the result column depending on data type
+            if data_type in ["timeseries", "profiles", "detections"]:
+                result_column = "RESULT_NUMBER"
+            elif data_type == "files":
+                result_column = "RESULT_STRING"
+            else: # json data type
+                result_column = "RESULT_JSON"
+
+            query = f"""
                 select
-                    "PHENOMENON_TIME_START" as timestamp,
-                    "PARAMETERS"->>'sourceImage' as "SourceImage",
-                    "PARAMETERS"->>'processedImage' as "ProcessedImage"                    
-                from "OBSERVATIONS"
-                where 
-                    "DATASTREAM_ID" = {inference_datastream} and
-                    "PHENOMENON_TIME_START" between '{time_start}' and '{time_end}'
-                ;
-                ''')
-            # Adding SENSOR_ID
-            df_inf["SENSOR_ID"] = sensor_name
-            df_inf = df_inf.set_index("timestamp")
+                    "OBSERVATIONS"."PHENOMENON_TIME_START" as timestamp,                    
+                    "PARAMETERS"->'depth' as depth,
+                    "OBSERVATIONS"."{result_column}" as value, -- change this dependingo on data type!!!
+                    "OBSERVATIONS"."RESULT_QUALITY"->>'qc_flag' as qc_flag,
+                    "OBSERVATIONS"."PHENOMENON_TIME_END" as time_end,
+                    "PARAMETERS" as parameters,
+                    "OBS_PROPERTIES"."NAME" AS variable,
+                    "SENSORS"."NAME" AS sensor_id,
+                    "THINGS"."NAME" AS platform_id,
+                    "FEATURES"."NAME" as foi
+                
+                from "OBSERVATIONS", "SENSORS", "THINGS", "DATASTREAMS", "OBS_PROPERTIES", "FEATURES"
+                where
+                    "OBSERVATIONS"."DATASTREAM_ID" in {sql_list(datastream_ids, string=False)}
+                    --time-start-filter
+                    --time-end-filter
+                    --foi-filter
+                    and "OBSERVATIONS"."DATASTREAM_ID" = "DATASTREAMS"."ID"
+                    and "DATASTREAMS"."SENSOR_ID"  =  "SENSORS"."ID"
+                    and "DATASTREAMS"."THING_ID" = "THINGS"."ID"
+                    and "OBS_PROPERTIES"."ID" = "DATASTREAMS"."OBS_PROPERTY_ID"
+                    and "FEATURES"."ID" = "OBSERVATIONS"."FEATURE_ID"
+                ;"""
 
-            taxa_dict = self.sta.dict_from_query(
-                f"""
-                select \"PROPERTIES\"->>'standardName' as taxa, \"ID\"  from \"DATASTREAMS\"
-                    where	
-                    \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
-                    and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
-                    and \"PROPERTIES\"->>'dataType' = 'detections'
-                    and \"PROPERTIES\"->>'modelName' = '{model_name}'
-             """)
+            if tstart:
+                query = query.replace("--time-start-filter", f"""    and "OBSERVATIONS"."PHENOMENON_TIME_START" >= '{tstart.strftime(iso_format)}'""")
+            if tstart:
+                query = query.replace("--time-start-filter", f"""    and "OBSERVATIONS"."PHENOMENON_TIME_END" < '{tend.strftime(iso_format)}'""")
+            if fois:
+                foi_ids = self.sta.list_from_query(f"""select "ID" from "FEATURES" where "NAME" in {sql_list(fois)};""")
+                query = query.replace("--foi-filter",
+                              f"""    and "OBSERVATIONS"."FEATURE_ID" in {sql_list(foi_ids, string=False)}""")
 
-            for taxa, datastream_id in taxa_dict.items():
-                self.info(f"Getting taxa='{taxa}' with ID={datastream_id}")
-                df = self.sta.dataframe_from_query(f'''
-                    select timestamp, value as "{taxa}" from detections
-                    where datastream_id = {datastream_id} and timestamp between '{time_start}' and '{time_end}';
-                ''').set_index("timestamp")
-                if df.empty:
-                    df_inf[taxa] = 0
-                else:
-                    df_inf = df_inf.join(df, "timestamp", "left")
 
-                df_inf[taxa] = df_inf[taxa].replace(np.nan, 0).astype(int)
-            dataframes.append(df_inf)
-        if not dataframes:
-            return pd.DataFrame()
-        df = pd.concat(dataframes).sort_index()
+            df = self.sta.dataframe_from_query(query)
 
+        else: # Now, deal with timeseries, profiles and detections in the same query
+            table_name = data_type  # Data type is the same as table name
+            # First, let's decide the columns to query
+            if data_type == "timeseries":
+                columns = f"timeseries.timestamp, null as depth, timeseries.value, timeseries.qc_flag,"""
+            elif data_type == "profiles":
+                columns = f"profiles.timestamp,  profiles.depth, profiles.value, profiles.qc_flag,"""
+            else: # detections
+                columns = f"detections.timestamp, null as depth, detections.value, null as profiles.qc_flag,"""
+
+            query = f"""
+                select
+                    {columns}
+                    null as time_end,
+                    null as parameters,                    
+                    "OBS_PROPERTIES"."NAME" AS variable,
+                    "SENSORS"."NAME" AS sensor_id,
+                    "THINGS"."NAME" AS platform_id,
+                    null as foi
+                from {table_name}, "SENSORS", "THINGS", "OBS_PROPERTIES", "DATASTREAMS"
+                where
+                    datastream_id in {sql_list(datastream_ids, string=False)}
+                    --time-start-filter
+                    --time-end-filter                    
+                    and {table_name}.datastream_id = "DATASTREAMS"."ID"
+                    and "DATASTREAMS"."SENSOR_ID"  =  "SENSORS"."ID"
+                    and "DATASTREAMS"."THING_ID" = "THINGS"."ID"
+                    and "OBS_PROPERTIES"."ID" = "DATASTREAMS"."OBS_PROPERTY_ID"
+                ;"""
+
+            if tstart:
+                query = query.replace("--time-start-filter", f"""    and timestamp >= '{tstart.strftime(iso_format)}'""")
+            if tstart:
+                query = query.replace("--time-start-filter", f"""    and timestamp < '{tend.strftime(iso_format)}'""")
+
+            df = self.sta.dataframe_from_query(query)
+
+        # sort by timestamp
+        df = df.sort_values('timestamp').reset_index(drop=True)
         return df
 
-    def dataframe_from_sta_timeseries(self, conf: dict, resource: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
+    def dataframe_from_sta_timeseries(self, conf: dict, resource: dict, station_ids: list, sensor_ids: list, time_start: pd.Timestamp = None,
                                       time_end: pd.Timestamp = None):
         """
         Returns a DataFrame for a specific Sensor in a specific time interval
         """
-
+        assert_type(station_ids, list)
+        assert_type(sensor_ids, list)
+        [assert_type(s, str) for s in station_ids]
+        [assert_type(s, str) for s in sensor_ids]
         data_type = resource["dataType"]
-        sensor_name = sensor["#id"]
-        station_name = station["#id"]
+        try:
+            avg_period = conf["dataSourceOptions"]["averagePeriod"]
+        except KeyError:
+            avg_period=""
 
-        variables = []  # by default all variables will be used
-        if "@variables" in conf.keys():
-            variables = conf["@variables"]
+        df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
+        # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
+        df = df[["timestamp", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
+        df = pivot_dataframe(df, pivot_cols=["value", "qc_flag"])
+        return df.set_index("timestamp")
 
-        if "averagePeriod" not in resource.keys():
-            full_data = True
-        else:
-            full_data = False
-            avg_period = resource["averagePeriod"]
-
-
-        # Get the THING_ID from SensorThings based on the Station name
-        thing_id = self.sta.value_from_query(
-            f'select "ID" from "THINGS" where "NAME" = \'{station_name}\';'
-        )
-        sensor_id = self.sta.value_from_query(
-            f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';'
-        )
-        # Super query that returns all varname and datastream_id  for one station-sensor combination
-        # Results are stored as a DataFrame
-        query = f'''select 
-                "OBS_PROPERTIES"."NAME" as varname, 
-                "DATASTREAMS"."ID" as datastream_id                    
-            from  
-                "DATASTREAMS"
-            left join 
-                "OBS_PROPERTIES"
-            on 
-                "DATASTREAMS"."OBS_PROPERTY_ID" = "OBS_PROPERTIES"."ID"
-            where 
-                "DATASTREAMS"."SENSOR_ID" = {sensor_id} and "DATASTREAMS"."THING_ID" = {thing_id} 
-                and "DATASTREAMS"."PROPERTIES"->>'dataType' = '{data_type}'
-                and ("DATASTREAMS"."PROPERTIES"->>'fullData')::boolean = {full_data}                    
-            '''
-
-        if not full_data:
-            # if we are dealing with an average, we need to make sure that the average period matches
-            query += f'\r\n\t\t and "DATASTREAMS"."PROPERTIES"->>\'averagePeriod\' = \'{avg_period}\''
-
-        query += ";"
-        datastreams = self.sta.dataframe_from_query(query)
-        sensor_dataframes = []
-        for idx, ds in datastreams.iterrows():
-            # ds is a dict with 'varname', 'datastream_id' and 'data_type'
-            datastream_id = ds["datastream_id"]
-            varname = ds["varname"]
-            if variables and varname not in variables:
-                continue
-
-            # Query all data from the datastream_id during the time range and assign proper variable name
-            if full_data:
-                q = (
-                    f'''
-                    select timestamp, value as "{varname}", qc_flag as "{varname + "_QC"}" 
-                    from timeseries 
-                    where datastream_id = {datastream_id}
-                    and timestamp between \'{time_start}\' and \'{time_end}\';                     
-                    '''
-                )
-            else:
-                # Query the regular OBSERVATIONS table
-                q = (f'''
-                    select
-                        "PHENOMENON_TIME_START" as timestamp,
-                        "RESULT_NUMBER" as "{varname}",
-                        "RESULT_QUALITY"->>'qc_flag' as "{varname + "_QC"}",
-                        "RESULT_QUALITY"->>'stdev' as "{varname + "_STD"}"
-                    from
-                        "OBSERVATIONS"
-                    where
-                        "DATASTREAM_ID" = {datastream_id}
-                        and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
-                ''')
-            df = self.sta.dataframe_from_query(q, debug=False)
-            sensor_dataframes.append(df)
-        if not sensor_dataframes:
-            return pd.DataFrame()  # return empty dataframe
-        df = merge_dataframes_by_columns(sensor_dataframes)
-        df = df.rename(columns={"timestamp": "TIME", "depth": "DEPTH"})
-        df = df.set_index("TIME")
-        df = df.sort_index(ascending=True)
-        return df
-
-    def dataframe_from_sta_profiles(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
+    def dataframe_from_sta_profiles(self, conf: dict, resource: dict, station_ids: list, sensor_ids: list, time_start: pd.Timestamp = None,
                                       time_end: pd.Timestamp = None):
         """
         Returns a DataFrame for a specific Sensor in a specific time interval
         """
-
-        data_type = conf["dataType"]
-        sensor_name = sensor["#id"]
-        station_name = station["#id"]
-
-        variables = []  # by default all variables will be used
-        if "@variables" in conf.keys():
-            variables = conf["@variables"]
-
+        assert_type(station_ids, list)
+        assert_type(sensor_ids, list)
+        [assert_type(s, str) for s in station_ids]
+        [assert_type(s, str) for s in sensor_ids]
+        data_type = resource["dataType"]
         try:
-            full_data = conf["dataSourceOptions"]["fullData"]
-        except KeyError:
-            self.error("[red]dataSourceOptions/fullData not found in dataset configuration!", exception=KeyError)
-
-        # Get the THING_ID from SensorThings based on the Station name
-        thing_id = self.sta.value_from_query(
-            f'select "ID" from "THINGS" where "NAME" = \'{station_name}\';'
-        )
-        sensor_id = self.sta.value_from_query(
-            f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';'
-        )
-        # Super query that returns all varname and datastream_id  for one station-sensor combination
-        # Results are stored as a DataFrame
-        query = f'''select 
-                "OBS_PROPERTIES"."NAME" as varname, 
-                "DATASTREAMS"."ID" as datastream_id                    
-            from  
-                "DATASTREAMS"
-            left join 
-                "OBS_PROPERTIES"
-            on 
-                "DATASTREAMS"."OBS_PROPERTY_ID" = "OBS_PROPERTIES"."ID"
-            where 
-                "DATASTREAMS"."SENSOR_ID" = {sensor_id} and "DATASTREAMS"."THING_ID" = {thing_id} 
-                and "DATASTREAMS"."PROPERTIES"->>'dataType' = '{data_type}'
-                and ("DATASTREAMS"."PROPERTIES"->>'fullData')::boolean = {full_data}                    
-            '''
-
-        if not full_data:
-            # if we are dealing with an average, we need to make sure that the average period matches
             avg_period = conf["dataSourceOptions"]["averagePeriod"]
-            query += f'\r\n\t\t and "DATASTREAMS"."PROPERTIES"->>\'averagePeriod\' = \'{avg_period}\''
+        except KeyError:
+            avg_period=""
 
-        query += ";"
-        datastreams = self.sta.dataframe_from_query(query)
-        sensor_dataframes = []
-        for idx, ds in datastreams.iterrows():
-            # ds is a dict with 'varname', 'datastream_id' and 'data_type'
-            datastream_id = ds["datastream_id"]
-            varname = ds["varname"]
-            if variables and varname not in variables:
-                self.warning(f"Ignoring variable {varname}")
-                continue
+        df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
+        # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi        df = df[["timestamp", "depth", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
+        df = df[["timestamp", "depth", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
+        df = pivot_dataframe(df, pivot_cols=["value", "qc_flag"])
+        return df.set_index("timestamp")
 
-            # Query all data from the datastream_id during the time range and assign proper variable name
-            if full_data:
-                q = (
-                    f'''
-                    select timestamp, depth, value as "{varname}", qc_flag as "{varname + "_QC"}" 
-                    from profiles 
-                    where datastream_id = {datastream_id}
-                    and timestamp between \'{time_start}\' and \'{time_end}\';                     
-                    '''
-                )
-            else:
-                # Query the regular OBSERVATIONS table
-                q = (f'''
-                    select
-                        "PHENOMENON_TIME_START" as timestamp,
-                        "PARAMETERS"->>'depth' as depth,
-                        "RESULT_NUMBER" as "{varname}",
-                        "RESULT_QUALITY"->>'qc_flag' as "{varname + "_QC"}",
-                        "RESULT_QUALITY"->>'stdev' as "{varname + "_STD"}"
-                    from
-                        "OBSERVATIONS"
-                    where
-                        "DATASTREAM_ID" = {datastream_id}
-                        and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
-                ''')
-            df = self.sta.dataframe_from_query(q, debug=False)
-            # b = df.copy(deep=True)
-            # b = df.set_index("timestamp", inplace=False)
-            # print(b["2021-01-24T23:50:00Z":"2021-01-24T23:59:13Z"])
-            sensor_dataframes.append(df)
-
-        df = merge_dataframes_by_columns(sensor_dataframes, timestamp=["timestamp", "depth"])
-        df = df.rename(columns={"timestamp": "TIME", "depth": "DEPTH"})
-        df = df.set_index("TIME")
-        df = df.sort_index(ascending=True)
-        return df
-
-    def dataframe_from_sta_observations(self, conf: dict, resource: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
+    def dataframe_from_sta_files(self, conf: dict, resource: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
                                       time_end: pd.Timestamp = None):
         """
         Returns a DataFrame for a specific Sensor in a specific time interval
@@ -830,79 +747,26 @@ class DataCollector(LoggerSuperclass):
         df = df.sort_index(ascending=True)
         return df
 
-    def dataframe_from_sta_json(self, conf, station:dict, sensor:dict, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
+    def dataframe_from_sta_json(self, conf: dict, resource: dict, station_ids: list, sensor_ids: list, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
         """
-        Return all the detections from a sensor
+        Return all the detections from a JSON data
+        return: DataFrame with columns: "timestamp", "depth", "value", "parameters", "variable", "sensor_id", "platform_id", "foi"
         """
-        sensor_name = sensor["#id"]
-        station_name = station["#id"]
-        self.info(f"dataframe_from_sta_json station {station_name} sensor {sensor_name}")
-        time_periods = []
-        if "constraints" in conf.keys() and "fieldOfView" in conf["constraints"]:
-            # Process fieldOfView constraint
-            deployments = self.mc.get_sensor_deployments(sensor)
-            # Keep only periods where the camera was looking to the chosen fieldOfView
-            for deployment in deployments:
-                if "fieldOfView" not in deployment.keys():
-                    self.error(f"Deployment has no fieldOfView! sensor={sensor_name} activity_id={deployment['id']}",
-                               exception=ValueError)
-                if conf["constraints"]["fieldOfView"]["@programmes"] == deployment["fieldOfView"]["@programmes"]:
-                    if deployment["end"]:
-                        end = deployment["end"]
-                    else:
-                        end = time_end
-                    time_periods.append((deployment["start"], end))
-                else:
-                    # No deployment with the fieldOfView of interest!
-                    pass
-        else:
-            time_periods = [(time_start, time_end)]
+        assert_type(station_ids, list)
+        assert_type(sensor_ids, list)
+        [assert_type(s, str) for s in station_ids]
+        [assert_type(s, str) for s in sensor_ids]
 
-        self.info(f"Sensor {sensor_name} time periods {time_periods}")
-        dataframes = []
-        for time_start, time_end in time_periods:
-            model_name = ""
-            self.info(f"Getting JSON with sensor={sensor_name} thing={station_name} from {time_start} to {time_end}")
-            try:
-                model_name = conf["constraints"]["@processes"]
-                self.info(f"Using data from AI process {model_name}")
-            except KeyError:
-               self.error("AI process not defined in 'detections' dataset!", exception=ValueError)
+        data_type = resource["dataType"]
+        try:
+            avg_period = conf["dataSourceOptions"]["averagePeriod"]
+        except KeyError:
+            avg_period=""
 
-            self.debug(f"getting datastream_id where dataType=json and sensor={sensor_name} and station={station_name}")
-            # First get all the times where we have inferences. Let's assume that we only have one datastream that
-            # matches data_type=json and model_name=<AI model>
-            q = f""" select \"ID\" from \"DATASTREAMS\" 
-                where 
-                    \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
-                    and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
-                    and \"PROPERTIES\"->>'dataType' = 'json'
-                    and \"PROPERTIES\"->>'modelName' = '{model_name}'
-                ;"""
-            try:
-                inference_datastream = self.sta.value_from_query(q)
-            except LookupError:
-                return pd.DataFrame()  # return empty dataframe
-
-            self.debug(f"Pictures datastream_id = {inference_datastream}")
-            df = self.sta.dataframe_from_query(f'''
-                select
-                    "PHENOMENON_TIME_START" as timestamp,
-                    "PARAMETERS"->>'sourceImage' as "sourceImage",
-                    "RESULT_JSON" as json,
-                    "FEATURES"."NAME" as foi
-                                        
-                from "OBSERVATIONS", "FEATURES"
-                where 
-                    "OBSERVATIONS"."FEATURE_ID" = "FEATURES"."ID" and
-                    "DATASTREAM_ID" = {inference_datastream} and
-                    "PHENOMENON_TIME_START" between '{time_start}' and '{time_end}'
-                ;
-                ''')
-            dataframes.append(df)
-        df = pd.concat(dataframes)
-        return df
-
+        df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
+        # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
+        df = df[["timestamp", "depth", "value", "parameters", "variable", "sensor_id", "platform_id", "foi"]]
+        return df.set_index("timestamp")
 
     def netcdf_from_sta(self, conf: dict, resource: dict, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
         """
@@ -913,39 +777,19 @@ class DataCollector(LoggerSuperclass):
         :return: generated NetCDF filename
         """
         self.debug("Creating NetCDF dataset")
-        station = self.mc.get_document("stations", conf["@stations"])
+        min_times = []
+        max_times = []
         dataframes = []  # list with a dataframe per variable
         metadata = self.metadata_harmonizer_conf(conf)
-        for sensor_name in conf["@sensors"]:
-            sensor_name = sensor_name.replace("-", "_")
-            self.info(f"Getting {sensor_name} data from {time_start} to {time_end}")
-            sensor = self.mc.get_document("sensors", sensor_name)
-            df = self.dataframe_from_sta(conf, station, sensor, resource, time_start=time_start, time_end=time_end)
-            df["sensor_id"] = sensor_name
-            df["platform_id"] = station["#id"].replace("-", "_")
-            for varname in df.columns:
-                if varname.endswith("_STD"):
-                    del df[varname]
-
-            if df.empty:
-                self.debug(f"no data for {sensor['#id']}  from {time_start} to {time_end}")
-                tstart = None
-                tend = None
-            else:
-                # now select real values of time start and time end
-                tstart = pd.Timestamp(df.index.values[0])
-                tend = pd.Timestamp(df.index.values[-1])
-                dataframes.append(df)
-
-
-        if all([df.empty for df in dataframes]):
+        df = self.dataframe_from_sta(conf, conf["@stations"], conf["@sensors"], resource, time_start=time_start, time_end=time_end)
+        if df.empty:
             self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
             return "", False
 
         self.info("Generating filename...")
-        filename = self.dataset_filename(conf, "netcdf", time_start, time_end)
+        filename = self.dataset_filename(conf, "netcdf", df.index[0], df.index[-1])
         self.info("Calling NetCDF wrapper...")
-        filename = self.call_dataset_generator(conf, dataframes, metadata, output=filename)
+        filename = self.call_dataset_generator(conf, [df], metadata, output=filename)
 
         self.info(f"Dataset {filename} generated!")
         return filename, False
@@ -965,24 +809,8 @@ class DataCollector(LoggerSuperclass):
         assert_type(time_start,  pd.Timestamp)
         assert_type(time_end,  pd.Timestamp)
 
-        station = self.mc.get_document("stations", conf["@stations"])
-        station_name = station["#id"]
-        variables = []  # by default all variables will be used
-        if "@variables" in conf.keys():
-            variables = conf["@variables"]
-
-        dataframes = []  # list with a dataframe per variable
-        metadata = []    # list of a metadata dict per variable
-        events = []
-
-        if len(conf["@sensors"]) > 1:
-            self.error("Unimplemented DwC-A for datasets with multiple sensors!", exception=ValueError)
-
-        sensor_name = conf["@sensors"][0]
-        self.info(f"Getting {sensor_name} data from {time_start} to {time_end}")
-        sensor = self.mc.get_document("sensors", sensor_name)
-        df = self.dataframe_from_sta_json(conf, station, sensor, time_start=time_start, time_end=time_end)
-        dwca = DarwinCoreArchive(self.mc, df, sensor, station, conf, time_start, time_end, self.log)
+        df = self.dataframe_from_sta(conf, conf["@stations"], conf["@sensors"], resource, time_start=time_start, time_end=time_end)
+        dwca = DarwinCoreArchive(self.mc, df, conf["@sensors"], conf["@stations"], conf, time_start, time_end, self.log)
         filename = self.dataset_filename(conf, "dwca", time_start, time_end)
         dwca.create_archive(filename)
         return filename, False
@@ -993,51 +821,7 @@ class DataCollector(LoggerSuperclass):
         Generates a CSV file from a SensorThings Database
         """
         filename = self.dataset_filename(conf, "csv", time_start, time_end)
-        station = self.mc.get_document("stations", conf["@stations"])
-        dataframes = []  # list with a dataframe per variable
-        data_type = resource["dataType"]
-
-        for sensor_name in conf["@sensors"]:
-            sensor = self.mc.get_document("sensors", sensor_name)
-
-            # Check if this sensor has any datastream with the assigned type
-            q = f"""
-                select count(*) from "DATASTREAMS" 
-                where "SENSOR_ID" = (select "ID" from "SENSORS" where "NAME" = '{sensor_name}') 
-                and "PROPERTIES"->>'dataType' = '{data_type}'; 
-            """
-            if self.sta.value_from_query(q) < 1:
-                self.info(f"No data for type {data_type} for sensor {sensor_name}")
-                continue
-
-            df = self.dataframe_from_sta(conf, station, sensor, resource, time_start, time_end)
-            if df.empty:
-                self.error(f"No data for sensor={sensor_name}  between {time_start} and {time_end}")
-                continue
-
-            df["SENSOR_ID"] = sensor_name
-            dataframes.append(df)
-
-        try:
-            merge_sensors = conf["dataSourceOptions"]["mergeSensors"]
-        except KeyError:
-            merge_sensors = False
-            pass
-
-        # if all([df.empty for df in dataframes]):
-        #     self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
-        #     print(dataframes)
-        #     raise LookupError("no data")
-
-        if merge_sensors:
-            # If merge sensors, merge dataframe by index ignoring SENSOR_ID
-            for df in dataframes:
-                del df["SENSOR_ID"]
-            df = merge_dataframes_by_columns(dataframes, timestamp="TIME")
-        else:
-            df = merge_dataframes(dataframes)
-
-        df = df.sort_index()
+        df = self.dataframe_from_sta(conf, conf["@stations"], conf["@sensors"], resource, time_start, time_end)
         df.to_csv(filename)
         self.info(f"Writing CSV file '{filename}'")
         return filename, False
@@ -1050,62 +834,31 @@ class DataCollector(LoggerSuperclass):
 
         :return filename, delivered
         """
+        dataset_id = conf["#id"]
 
         # Create the dataset in /var/tmp
         self.info(f"Creating ZIP dataset, ID: {conf['#id']}, from {time_start} to {time_end}")
 
-        dataset_id = conf["#id"]
-        resource_id = resource["id"]
-        tmp_folder = f"/var/tmp/{datetime.datetime.now().strftime('%s')}/{dataset_id}"
-        remote_filename = self.dataset_filename(conf, "zip", time_start, time_end,
-                                                tmp_folder="/var/tmp")
 
-        # Check if the ZIP already exists, it may save a lot of time
-        if check_url(self.fileserver.path2url(os.path.join(resource["path"], os.path.basename(remote_filename)))):
-            if overwrite:
-                self.warning(f"Overwriting previous dataset {remote_filename}")
-            else:
-                self.warning(f"File {remote_filename} already exists and available online!")
-                return "", False
+        try:
+            # Check if there are fieldOfView constrains in the dataset
+            fois = [conf["constraints"]["fieldOfView"]["@programmes"]]
+        except KeyError:
+            fois = []
 
-        # First step, get all files indexed in the SensorThings database
-        datastream_ids = []
+        # Getting dataframe
+        df = self.dataframe_from_sta_generic(conf["@stations"], conf["@sensors"], "files", tstart=time_start,
+                                             tend=time_end, fois=fois)
+        # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
+        df = df[["timestamp", "value", "sensor_id", "platform_id", "foi"]]
+        df = df.rename(columns={"value": "urls"})
 
-        for sensor in conf["@sensors"]:
-            sensor_id = self.sta.sensor_id_name[sensor]
-            # Get the Datastream ID of the files
-            df = self.sta.dataframe_from_query(f'''
-             select
-                 "ID" from "DATASTREAMS" 
-             where 
-                 "PROPERTIES"->>'dataType' = 'files'
-                 and "SENSOR_ID" = {sensor_id}; 
-             ''', debug=False)
-
-            files_ids = df["ID"].values  # convert dataframe to list
-
-            for i in files_ids:
-                datastream_ids.append(str(i))
-
-        if len(datastream_ids) == 0:
-            raise ValueError(f"No valid Datastreams found for sensors={conf['@sensors']} with dataType=files")
-        # Now let's query for all registered files in the database matching the datastreams
-        df = self.sta.dataframe_from_query(f'''
-         select 
-            "OBSERVATIONS"."PHENOMENON_TIME_START" as time,
-            "OBSERVATIONS"."PHENOMENON_TIME_END" as time_end,
-            "SENSORS"."NAME" as sensor,
-            "OBSERVATIONS"."RESULT_STRING" as urls
-        from "OBSERVATIONS", "DATASTREAMS", "SENSORS"             
-        where            
-            "DATASTREAM_ID" IN ({', '.join(datastream_ids)}) and
-            "OBSERVATIONS"."DATASTREAM_ID" = "DATASTREAMS"."ID" and
-            "SENSORS"."ID" = "DATASTREAMS"."SENSOR_ID" and
-            "OBSERVATIONS"."PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\'
-        ;
-        ''', debug=False)
         if df.empty:
-            self.error(f"could not generate dataset {dataset_id}:{resource_id}", exception=ValueError)
+            self.error(f"could not generate dataset {conf['#id']}:{resource['#id']}", exception=ValueError)
+
+        remote_filename = self.dataset_filename(conf, "zip", time_start, time_end, tmp_folder="/var/tmp")
+
+        tmp_folder = f"/var/tmp/{datetime.datetime.now().strftime('%s')}/{dataset_id}"
 
         # Now we will do the following:
         # 1. Create a temporal folder in /var/temp/<epochtime>
@@ -1133,7 +886,7 @@ class DataCollector(LoggerSuperclass):
         df["src_files"] = files
         dst_files = []
         for _, row in df.iterrows():
-            sensor = row["sensor"]
+            sensor = row["sensor_id"]
             dst_files.append(sensor + "/" + os.path.basename(row["src_files"]))
 
         df["files"] = dst_files
@@ -1144,9 +897,6 @@ class DataCollector(LoggerSuperclass):
                 self.info("Converting relative file paths to absolute ones before zipping files")
                 df["src_files"] = [os.path.abspath(f) for f in df["src_files"]]
 
-
-
-
         dfcsv = df.copy()
         dfcsv = dfcsv
         del dfcsv["src_files"]
@@ -1155,7 +905,7 @@ class DataCollector(LoggerSuperclass):
         # with the command and send it to the host
         script_name = os.path.basename(remote_filename).split(".")[0] + ".sh"
         self.info(f"Creating zip script {script_name}...")
-        sensors = df["sensor"].unique()  # get list of sensors with data
+        sensors = df["sensor_id"].unique()  # get list of sensors with data
 
         # create sensor folders
         for sensor in sensors:
@@ -1164,7 +914,7 @@ class DataCollector(LoggerSuperclass):
         self.fileserver.send_file(tmp_folder, "index.csv", indexed=False)
         os.remove("index.csv")  # remove local index.csv
 
-        #======== Creating Bash script to create zip remotely ========#
+        # ======== Creating Bash script to create zip remotely ========#
         cmd = "#!/bin/bash\n"
         cmd += "set -o errexit\n"
         cmd += "set -o nounset\n"
@@ -1194,13 +944,11 @@ class DataCollector(LoggerSuperclass):
 
         # Check if the size is coherent
         a = run_over_ssh(self.fileserver.host, f"ls -l {remote_filename}")
-        size = int(a.split(" ")[4]) # size is column 5 of ls -l command
+        size = int(a.split(" ")[4])  # size is column 5 of ls -l command
         if size < 3000:
-
             self.warning(f"first url: {df['urls'].values[0]}")
             self.warning(f"last  url: {df['urls'].values[-1]}")
             self.error("ZIP file looks empty! less than 3k means there's nothing inside", exception=ValueError)
-
 
         # At this point the file should be created
         # if the destination and the fileserver are the same (very likely), just copy from temp folder to the definitive
@@ -1259,7 +1007,8 @@ class DataCollector(LoggerSuperclass):
         for var, units in variable_units.items():
             assert len(np.unique(units)) == 1, f"Variables do not have consistent units! variable={var} units={units}"
 
-        station = self.mc.get_document("stations", dataset["@stations"])
+        # Using first station to get owner
+        station = self.mc.get_document("stations", dataset["@stations"][0])
 
         # Get minimum info (PI and owner)
         pi, _ = self.mc.get_contact_by_role(dataset, "ProjectLeader")
@@ -1366,27 +1115,27 @@ class DataCollector(LoggerSuperclass):
                 "sdn_uom_uri": units["definition"],
                 "standard_name": variable["standard_name"],
             }
+        for station_id in dataset["@stations"]:
+            platform = self.mc.get_document("stations", station_id)
+            platform_name = station_id.replace("-", "_").replace(" ", "_")
+            self.warning(f"Assuming that station '{platform['#id']}' is fixed and has lat,lon,depth")
+            latitude, longitude, depth = self.mc.get_station_position(station["#id"], tstart)
 
-        platform = self.mc.get_document("stations", dataset["@stations"])
-        platform_name = station["#id"].replace("-", "_").replace(" ", "_")
-        self.warning(f"Assuming that station '{platform['#id']}' is fixed and has lat,lon,depth")
-        latitude, longitude, depth = self.mc.get_station_position(station["#id"], tstart)
+            meta["platforms"][platform_name] = {
+                "long_name": platform["longName"],
+                "platform_type_name": platform["platformType"]["label"],
+                "platform_type_uri": platform["platformType"]["definition"],
+                "platform_reference": platform["platformType"]["definition"],
 
-        meta["platforms"][platform_name] = {
-            "long_name": platform["longName"],
-            "platform_type_name": platform["platformType"]["label"],
-            "platform_type_uri": platform["platformType"]["definition"],
-            "platform_reference": platform["platformType"]["definition"],
-
-            "depth": depth,
-            "latitude": latitude,
-            "longitude": longitude
-        }
-        # Fill optional arguments
-        optional_args = {"wmo_number": "wmo_platform_code"}
-        for key, value in optional_args.items():
-            if key in station.items() and station[key]:
-                meta["platforms"][platform_name][key] = station[value]
+                "depth": depth,
+                "latitude": latitude,
+                "longitude": longitude
+            }
+            # Fill optional arguments
+            optional_args = {"wmo_number": "wmo_platform_code"}
+            for key, value in optional_args.items():
+                if key in station.items() and station[key]:
+                    meta["platforms"][platform_name][key] = station[value]
 
         return meta
 
@@ -1424,7 +1173,7 @@ class DataCollector(LoggerSuperclass):
         with open(meta_file, "w") as f:
             yaml.dump(metadata, f)
 
-        emh.generate_dataset(data_files, [meta_file], log=self.log, output=output)
+        emh.generate_dataset(data_files, [meta_file], output=output)
         for f in data_files:
             os.remove(f)
         os.remove(meta_file)

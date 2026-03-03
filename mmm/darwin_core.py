@@ -42,26 +42,40 @@ from mmm.xmlutils import get_element, serialize_xml, create_element
 
 
 class DarwinCoreArchive(LoggerSuperclass):
-    def __init__(self, mc: MetadataCollector, df: pd.DataFrame, sensor: dict, station: dict, dataset: dict, time_start: pd.Timestamp, time_end: pd.Timestamp, log:logging.Logger):
+    """
+    Creates a Darwin Core Archive from data in the database. The DataFrame must have the following columns:
+    'timestamp' (index), 'depth', 'value', 'parameters', 'variable', 'sensor_id', 'platform_id','foi'
+
+    It is expected that the detections are stored inside results as:
+        [{"taxa": "Chromis chromis", "confidence": 0.975, "bounding_box_xyxy": [0.389, 0.312, 0.461, 0.427]}, {"taxa": "Chromis chromis", "confidence": 0.969, "bounding_box_xyxy": [0.816, 0.091, 0.836, 0.14]}, {"taxa": "Chromis chromis", "confidence": 0.927, "bounding_box_xyxy": [0.21, 0.69, 0.23, 0.724]}, {"taxa": "Chromis chromis", "confidence": 0.911, "bounding_box_xyxy": [0.524, 0, 0.547, 0.046]}, {"taxa": "Chromis chromis", "confidence": 0.86, "bounding_box_xyxy": [0.541, 0.311, 0.556, 0.339]}, {"taxa": "Chromis chromis", "confidence": 0.713, "bounding_box_xyxy": [0.381, 0.398, 0.395, 0.421]}, {"taxa": "Chromis chromis", "confidence": 0.656, "bounding_box_xyxy": [0.236, 0.402, 0.259, 0.422]}]
+
+    """
+    def __init__(self, mc: MetadataCollector, df: pd.DataFrame, sensor_ids: list, station_ids: list, dataset: dict,
+                 time_start: pd.Timestamp, time_end: pd.Timestamp, log:logging.Logger):
         """
         Creates a Darwin Core class with Event core, Occurrences and eMoF tables
         :param mc:
         """
-
         LoggerSuperclass.__init__(self, log, "DwC", colour=GRN)
         self.dwc_prefix = "http://rs.tdwg.org/dwc/terms/"
 
+        if len(station_ids) != 1:
+            raise ValueError("Unimplemented DwCa with several stations!")
+
+        if len(sensor_ids) != 1:
+            raise ValueError("Unimplemented DwCa with several sensors!")
+
+
         assert_type(mc, MetadataCollector)
         self.mc = mc
-        self.sensor = sensor
-        self.station = station
         self.dataset = dataset
         # Get the AI process
         self.process = self.mc.get_document("processes", dataset["constraints"]["@processes"])
         self.df = df
+        station = self.mc.get_document("stations", station_ids[0])
 
-        self.time_start = df["timestamp"].min()
-        self.time_end = df["timestamp"].max()
+        self.time_start = df.index.min()
+        self.time_end = df.index.max()
 
         # Files are empty by default
         self.f_events = ""
@@ -80,8 +94,8 @@ class DarwinCoreArchive(LoggerSuperclass):
 
         assert len(df["foi"].unique()) == 1, f"Multiple FoIs unimplemented"
 
-        sensor_name = self.sensor["#id"]
-        station_name = self.station["#id"]
+        sensor_name = sensor_ids[0]
+        station_name = station_ids[0]
         process_name = self.process["#id"]
         if "reference" not in self.process.keys():
             self.error(f"reference field not included in process '{process_name}'", exception=ValueError)
@@ -132,19 +146,19 @@ class DarwinCoreArchive(LoggerSuperclass):
                 # TODO: get camera info / platform /station type from the database
 
             })
-        for _, row in df.iterrows():
+        for idx, row in df.iterrows():
             # Store the picture as an event
-            pic = row["sourceImage"]
+            pic = row["parameters"]["sourceImage"]
 
             events.append({
                 "id": pic,
                 "eventID": pic,
                 "parentEventID": camera_event_id,
                 "eventType": "Observation",
-                "eventDate": row["timestamp"].strftime("%Y-%m-%dT%H:%M:%SZ")
+                "eventDate": idx.strftime("%Y-%m-%dT%H:%M:%SZ")
             })
 
-            for i, res in enumerate(row["json"]):
+            for i, res in enumerate(row["value"]):
                 taxa = res["taxa"]
                 normalized_taxa = taxa.replace(".", "").replace(" ", "_")
                 occurrence_id = pic + f"?n={i + 1:03d}"

@@ -8,6 +8,7 @@ license: MIT
 created: 27/5/24
 """
 import logging
+import random
 import shutil
 import unittest
 import os
@@ -34,8 +35,8 @@ parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 sys.path.insert(0, parent_dir)
 
 from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_metadata_to_sensorthings,
-                 bulk_load_data, propagate_metadata_to_ckan, CkanClient, get_station_deployments)
-from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url, \
+                 bulk_load_data, propagate_metadata_to_ckan, get_station_deployments)
+from mmm.common import LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url, \
     download_file, WHT
 from mmapi import run_metadata_api
 from sta_timeseries import run_sta_timeseries_api
@@ -49,6 +50,7 @@ test_log_files = []
 
 log_level = logging.CRITICAL
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+logging.getLogger('emso_metadata_harmonizer').setLevel(logging.ERROR)
 
 def str_to_bool(value: str) -> bool:
     return value.strip().lower() == "true"
@@ -77,19 +79,14 @@ def patch_json(url, data):
 class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     @classmethod
     def setUpClass(cls):
-
         dotenv.load_dotenv("config-tests.env")
-
         global redirect_stdout
         redirect_stdout = str_to_bool(os.environ["REDIRECT_STDOUT"])
 
         # Process environment file
-        cls.timeseries_raw_data = str_to_bool(os.environ["TIMESERIES_RAW_DATA"])
-        cls.timeseries_avg_data = str_to_bool(os.environ["TIMESERIES_AVG_DATA"])
-        cls.profiles_raw_data = str_to_bool(os.environ["PROFILES_RAW_DATA"])
-        cls.profiles_avg_data = str_to_bool(os.environ["PROFILES_AVG_DATA"])
-        cls.detections_raw_data = str_to_bool(os.environ["DETECTIONS_RAW_DATA"])
-        cls.detections_avg_data = str_to_bool(os.environ["DETECTIONS_AVG_DATA"])
+        cls.timeseries_data = str_to_bool(os.environ["TIMESERIES_DATA"])
+        cls.profiles_data = str_to_bool(os.environ["PROFILES_DATA"])
+        cls.detections_data = str_to_bool(os.environ["DETECTIONS_DATA"])
         cls.files_data = str_to_bool(os.environ["FILES_DATA"])
         cls.json_data = str_to_bool(os.environ["JSON_DATA"])
 
@@ -236,7 +233,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.log.info("Inserting several 'units' via API")
         data = {
             "#id": "degrees_celsius",
-            "name": "degrees Celsius2",
+            "name": "degrees Celsius",
             "symbol": "degC",
             "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UPAA/",
             "type": "linear"
@@ -783,8 +780,44 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             }
         }
         d2 = {
-            "#id": "OBSEA_Biotop",
-            "description": "Biotope in front of OBSEA",
+            "#id": "OBSEA_Biotop_Blue",
+            "description": "Biotope in front of OBSEA, blue squares",
+            "@projects": [],
+            "geoJsonFeature": {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                    "coordinates": [
+                        [
+                            [
+                                1.7515221855838945,
+                                41.183341295396275
+                            ],
+                            [
+                                1.7515221855838945,
+                                41.181307814018794
+                            ],
+                            [
+                                1.7538603482693702,
+                                41.181307814018794
+                            ],
+                            [
+                                1.7538603482693702,
+                                41.183341295396275
+                            ],
+                            [
+                                1.7515221855838945,
+                                41.183341295396275
+                            ]
+                        ]
+                    ],
+                    "type": "Polygon"
+                }
+            }
+        }
+        d3 = {
+            "#id": "OBSEA_Biotop_Red",
+            "description": "Biotope in front of OBSEA, red squares",
             "@projects": [],
             "geoJsonFeature": {
                 "type": "Feature",
@@ -820,6 +853,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }
         self.mc.insert_document("programmes", d)
         self.mc.insert_document("programmes", d2)
+        self.mc.insert_document("programmes", d3)
 
 
     def test_10_add_profile_sensor(self):
@@ -1159,7 +1193,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
 
     def test_13_add_datasets(self):
-        
         d = {
             "#id": "obsea_ctd_full",
             "title": "CTD data at OBSEA Underwater Observatory full data",
@@ -1168,7 +1201,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "SBE37",
                 "SBE16"
             ],
-            "@stations": "OBSEA",
+            "@stations": ["OBSEA"],
             "dataType": "timeseries",
             "dataSourceOptions": {
                 "fullData": True
@@ -1233,7 +1266,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "SBE37",
                 "SBE16"
             ],
-            "@stations": "OBSEA",
+            "@stations": ["OBSEA"],
             "dataType": "timeseries",
             "dataSourceOptions": {
                 "fullData": False,
@@ -1285,8 +1318,127 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 }
             ],
             "funding": { "@projects": ["Geo-INQUIRE"] }
-        }  # obsea_ctd_30min
+        }
 
+        self.mc.insert_document("datasets", d)
+
+        d = {
+            "#id": "awac_full",
+            "title": "AWAC current profiler data full",
+            "summary": "AWAC current profiler data",
+            "@sensors": ["AWAC"],
+            "@stations": ["OBSEA"],
+            "dataType": "profiles",
+            "dataSourceOptions": {
+                "fullData": True,
+            },
+            "export": {
+                "erddap": {
+                    "resources": [{
+                        "id": "awac_dataset",
+                        "host": "localhost",
+                        "path": "./datasets",
+                        "period": "monthly",
+                        "format": "netcdf",
+                        "dataType": "profiles",
+                        "averagePeriod": "30min"
+                    }]
+                },
+                "fileserver": {
+                    "resources": [{
+                        "id": "netcdf_dataset",
+                        "host": "localhost",
+                        "path": "./fileserver/datasets/awac_dataset_full",
+                        "period": "yearly",
+                        "format": "netcdf",
+                        "dataType": "profiles"
+                    }]
+                },
+                "ckan": {
+                    "resources": [{
+                        "id": "ctd",
+                        "link": "$fileserver/netcdf_dataset",
+                        "title": "AWAC full data dataset",
+                        "description": "AWAC full data dataset",
+                    }]
+                }
+            },
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "DataCurator"
+                },
+                {
+                    "@people": "enoc_martinez",
+                    "role": "ProjectLeader"
+                },
+                {
+                    "@organizations": "upc",
+                    "role": "RightsHolder"
+                }
+            ],
+            "funding": {"@projects": ["Geo-INQUIRE"]}
+        }
+        self.mc.insert_document("datasets", d)
+
+        d = {
+            "#id": "awac_30min",
+            "title": "AWAC current profiler data 30min",
+            "summary": "AWAC current profiler data",
+            "@sensors": ["AWAC"],
+            "@stations": ["OBSEA"],
+            "dataType": "profiles",
+            "dataSourceOptions": {
+                "fullData": False,
+                "averagePeriod": "30min"
+            },
+            "export": {
+                "erddap": {
+                    "resources": [{
+                        "id": "awac_dataset",
+                        "host": "localhost",
+                        "path": "./datasets",
+                        "period": "monthly",
+                        "format": "netcdf",
+                        "dataType": "profiles",
+                        "averagePeriod": "30min"
+                    }]
+                },
+                "fileserver": {
+                    "resources": [{
+                        "id": "netcdf_dataset",
+                        "host": "localhost",
+                        "path": "./fileserver/datasets/awac_dataset_full",
+                        "period": "yearly",
+                        "format": "netcdf",
+                        "dataType": "profiles"
+                    }]
+                },
+                "ckan": {
+                    "resources": [{
+                        "id": "ctd",
+                        "link": "$fileserver/netcdf_dataset",
+                        "title": "AWAC full data dataset",
+                        "description": "AWAC full data dataset",
+                    }]
+                }
+            },
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "DataCurator"
+                },
+                {
+                    "@people": "enoc_martinez",
+                    "role": "ProjectLeader"
+                },
+                {
+                    "@organizations": "upc",
+                    "role": "RightsHolder"
+                }
+            ],
+            "funding": {"@projects": ["Geo-INQUIRE"]}
+        }
         self.mc.insert_document("datasets", d)
 
         d = {
@@ -1296,7 +1448,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "@sensors": [
                 "IPC608"
             ],
-            "@stations": "OBSEA",
+            "@stations": ["OBSEA"],
             "dataSourceOptions": {
                 "host": "localhost"
             },
@@ -1339,6 +1491,113 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }  # underwater pictures dataset
         self.mc.insert_document("datasets", d)
 
+        # PICs with only BLUE squres
+        d = {
+            "#id": "IPC608_pics_blue",
+            "title": "Underwater photography at OBSEA (only blue squares)",
+            "summary": "Underwater photography at OBSEA (only blue squares)",
+            "@sensors": [
+                "IPC608"
+            ],
+            "@stations": ["OBSEA"],
+            "dataSourceOptions": {
+                "host": "localhost"
+            },
+            "constraints": {
+              "fieldOfView": {"@programmes": "OBSEA_Biotop_Blue"}
+            },
+            "dataType": "files",
+            "export": {
+                "fileserver": {
+                    "resources": [{
+                        "id": "zip_pics",
+                        "host": "localhost",
+                        "path": "./fileserver/datasets/IPC608_pics_blue",
+                        "period": "yearly",
+                        "format": "zip",
+                        "dataType": "files"
+                    }]
+                },
+                "ckan": {
+                    "resources": [{
+                        "id": "zip",
+                        "link": "$fileserver/zip_pics",
+                        "title": "Pictures from camera IPC608 at OBSEA",
+                        "description": "pictures taken from a IPC608 camera at OBSEA"
+                    }]
+                }
+            },
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "DataCurator"
+                },
+                {
+                    "@people": "enoc_martinez",
+                    "role": "ProjectLeader"
+                },
+
+                {
+                    "@organizations": "upc",
+                    "role": "RightsHolder"
+                }
+            ]
+        }  # underwater pictures dataset
+        self.mc.insert_document("datasets", d)
+
+        # PICs with only RED squares
+        d = {
+            "#id": "IPC608_pics_red",
+            "title": "Underwater photography at OBSEA (only blue squares)",
+            "summary": "Underwater photography at OBSEA (only blue squares)",
+            "@sensors": [
+                "IPC608"
+            ],
+            "@stations": ["OBSEA"],
+            "dataSourceOptions": {
+                "host": "localhost"
+            },
+            "constraints": {
+              "fieldOfView": {"@programmes": "OBSEA_Biotop_Red"}
+            },
+            "dataType": "files",
+            "export": {
+                "fileserver": {
+                    "resources": [{
+                        "id": "zip_pics",
+                        "host": "localhost",
+                        "path": "./fileserver/datasets/IPC608_pics_red",
+                        "period": "yearly",
+                        "format": "zip",
+                        "dataType": "files"
+                    }]
+                },
+                "ckan": {
+                    "resources": [{
+                        "id": "zip",
+                        "link": "$fileserver/zip_pics",
+                        "title": "Pictures from camera IPC608 at OBSEA",
+                        "description": "pictures taken from a IPC608 camera at OBSEA"
+                    }]
+                }
+            },
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "DataCurator"
+                },
+                {
+                    "@people": "enoc_martinez",
+                    "role": "ProjectLeader"
+                },
+
+                {
+                    "@organizations": "upc",
+                    "role": "RightsHolder"
+                }
+            ]
+        }  # underwater pictures dataset
+        self.mc.insert_document("datasets", d)
 
         d = {
             "#id": "biodiversity_datasets",
@@ -1347,7 +1606,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "@sensors": [
                 "IPC608"
             ],
-            "@stations": "OBSEA",
+            "@stations": ["OBSEA"],
             "dataSourceOptions": {
                 "host": "localhost"
             },
@@ -1418,7 +1677,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_30_ingest_avg_timeseries_data(self):
         """Ingesting average timeseries data using the API"""
-        if not self.timeseries_avg_data:
+        if not self.timeseries_data:
             self.skipTest("config skips timeseries data")
         # Generate sine wave values
         frequency = 3
@@ -1495,7 +1754,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     def test_31_bulk_load_raw_timeseries_data(self):
         """Ingesting average timeseries data using the API"""
         
-        if not self.timeseries_raw_data:
+        if not self.timeseries_data:
             self.skipTest("config skips timeseries data")
 
         # Generate sine wave values
@@ -1572,7 +1831,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_32_get_raw_timeseries_data_api(self):
         """get timeseries from the API"""
-        if not self.timeseries_raw_data:
+        if not self.timeseries_data:
             self.skipTest("config skips timeseries data")
 
         temp_id = self.dc.sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
@@ -1586,7 +1845,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     def test_33_bulk_load_avg_timeseries_data(self):
         """Bulk load average timeseries data"""
 
-        if not self.timeseries_avg_data:
+        if not self.timeseries_data:
             self.skipTest("config skips timeseries data")
         # Generate sine wave values
         frequency = 1
@@ -1638,7 +1897,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     def test_40_ingest_avg_profile_data(self):
         """Ingesting average timeseries data using the API"""
         # Generate sine wave values
-        if not self.profiles_avg_data:
+        if not self.profiles_data:
             self.skipTest("skip avg profile")
 
         frequency = 1
@@ -1686,7 +1945,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_41_ingest_raw_profile_data(self):
         """Ingesting raw profiles data using the API"""
-        if not self.profiles_raw_data:
+        if not self.profiles_data:
             self.skipTest("skip raw profile")
 
         # Generate sine wave values
@@ -1745,7 +2004,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_42_add_profile_to_ctd(self):
         """Add profile data to a sensor that has both timeseries and profile data"""
-        if not self.profiles_raw_data:
+        if not self.profiles_data:
             self.skipTest("skip avg profile")
 
         frequency = 1
@@ -1812,9 +2071,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             draw = ImageDraw.Draw(image)
             top_left = (50 + i * 10, 50 + i * 10)  # Top-left corner of the rectangle
             bottom_right = (150 + i * 10, 150 + i * 10)  # Bottom-right corner of the rectangle
-            rectangle_color = 'blue'  # Color of the rectangle
+            rectangle_color = 'green'  # Color of the rectangle
             draw.rectangle([top_left, bottom_right], fill=rectangle_color)
-            f = f'rectangle_blue_{i:02d}.jpg'
+            f = f'rectangle_green_{i:02d}.jpg'
             image.save(f)  # Save the image to a file
             files.append(f)
 
@@ -1858,7 +2117,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         width, height = 2000, 2000  # Define the dimensions of the image
 
+        # Create RED pictures
         pictures = []
+        fois = []
         for i in range(1, 100):
             image = Image.new('RGB', (width, height), 'white')  # Create a white background image
             draw = ImageDraw.Draw(image)
@@ -1869,6 +2130,21 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             filename = f"rectangle_red_{i:03d}.jpg"
             image.save(filename)  # Save the image to a file
             pictures.append(filename)
+            fois.append("OBSEA_Biotop_Red")
+
+        # Create BLUE pictures
+        for i in range(1, 100):
+            image = Image.new('RGB', (width, height), 'white')  # Create a white background image
+            draw = ImageDraw.Draw(image)
+            top_left = (50 + i * 10, 50 + i * 10)  # Top-left corner of the rectangle
+            bottom_right = (150 + i * 10, 150 + i * 10)  # Bottom-right corner of the rectangle
+            rectangle_color = 'blue'  # Color of the rectangle
+            draw.rectangle([top_left, bottom_right], fill=rectangle_color)
+            filename = f"rectangle_blue_{i:03d}.jpg"
+            image.save(filename)  # Save the image to a file
+            pictures.append(filename)
+            fois.append("OBSEA_Biotop_Blue")
+
 
         # Let's create a csv file for file bulk load
         data = {
@@ -1881,14 +2157,18 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         end = "2023-03-01T00:00:00Z"
         dates = pd.date_range(start=start, end=end, freq='30min')
         datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", "files")
-        foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
-        for i in range(len(pictures)):
+
+        foi_dict = self.dc.sta.dict_from_query('select "NAME", "ID" from "FEATURES"')
+
+        for i, (pic, foi_name) in enumerate(zip(pictures, fois)):
             url = self.dc.fileserver.send_file("./fileserver/pictures/IPC608", pictures[i])
             data["timestamp"].append(dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'))
             data["results"].append(url)
             data["datastream_id"].append(datastream_id)
+            foi_id = foi_dict[foi_name]
             data["foi_id"].append(foi_id)
             os.remove(pictures[i])
+
         df = pd.DataFrame(data)
         datafile = "test51-files.csv"
         df.to_csv(datafile)
@@ -1899,7 +2179,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         os.remove(datafile)
 
         # Now, let's download all the data that we injected, see if it's available
-        data = get_json(self.sta_url + f"/Datastreams({datastream_id})/Observations?$filter=phenomenonTime ge {start}")
+        data = get_json(self.sta_url + f"/Datastreams({datastream_id})/Observations?$filter=phenomenonTime ge {start}&$top=1000")
         results = data["value"]
         self.assertEqual(len(results), len(pictures))
         # Now download all files
@@ -1911,27 +2191,43 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         data = {
             "timestamp": [],
             "results": [],
+            "parameters": [],
             "datastream_id": [],
             "foi_id": []
         }
         dates = pd.date_range(start='2023-02-01', end="2023-03-01", freq='30min')
         datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "FATX", "json")
         foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
+
+        def random_fish_detections():
+            _taxa = ["Chromis chromis", "Diplodus vulgaris"]
+
+            def r():  # Random from 0 to 1
+                return round(random.uniform(0, 1), 3)
+            fdata = []
+            for _ in range(0, random.randint(0, 4)):
+                fdata.append({
+                    "taxa": random.choice(_taxa),
+                    "confidence": r(),
+                    "bounding_box_xyxy": [r(), r(), r(), r()]
+                })
+            return fdata
+
         for i in range(len(pictures)):
             data["timestamp"].append(dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'))
-            data["results"].append({"someInferenceData": i})
+            data["results"].append(random_fish_detections())
+            data["parameters"].append({"sourceImage": f"http://fake.url/{pictures[i]}"})
             data["datastream_id"].append(datastream_id)
             data["foi_id"].append(foi_id)
         df = pd.DataFrame(data)
         datafile = "test51-inference.csv"
-        df.to_csv(datafile)
+        df.to_csv(datafile, index=False)
 
-        bulk_load_data(datafile, self.conf, "IPC608", "files", "OBSEA",
-                       tmp_folder="./tmpdata")
+        bulk_load_data(datafile, self.conf, "IPC608", "json", "OBSEA", tmp_folder="./tmpdata")
         os.remove(datafile)
 
         # Now, let's download all the data that we injected, see if it's available
-        data = get_json(self.sta_url + f"/Datastreams({datastream_id})/Observations?$filter=phenomenonTime ge {start}")
+        data = get_json(self.sta_url + f"/Datastreams({datastream_id})/Observations?$filter=phenomenonTime ge {start}&$top=1000")
         results = data["value"]
         self.assertEqual(len(results), len(pictures))
 
@@ -1967,12 +2263,12 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         os.remove(datafile)
 
         # Now, let's download all the data that we injected, see if it's available
-        data = get_json(self.sta_ts_url + f"/Datastreams({chromis_id})/Observations?$filter=phenomenonTime ge {start}")
+        data = get_json(self.sta_ts_url + f"/Datastreams({chromis_id})/Observations?$filter=phenomenonTime ge {start}&$top=1000")
         results = data["value"]
         self.assertEqual(len(results), len(pictures))
 
         # Now, let's download all the data that we injected, see if it's available (only via sta-timeseries API)
-        data = get_json(self.sta_ts_url + f"/Datastreams({diplodus_id})/Observations?$filter=phenomenonTime ge {start}")
+        data = get_json(self.sta_ts_url + f"/Datastreams({diplodus_id})/Observations?$filter=phenomenonTime ge {start}&$top=1000")
         results = data["value"]
         self.assertEqual(len(results), len(pictures))
 
@@ -2007,7 +2303,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_61_correct_data_in_hypertables(self):
         """check that only the correct data is stored in the hypertables"""
-        if not (self.timeseries_raw_data or self.profiles_raw_data or self.detections_raw_data):
+        if not (self.timeseries_data or self.profiles_data or self.detections_data):
             self.skipTest("Skipping hypertables")
 
         sta = self.dc.sta
@@ -2062,23 +2358,16 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.dc.sta.exec_query(f"delete from detections where datastream_id = {timeseries_id};", fetch=False)
         self.dc.sta.exec_query(f"delete from profiles where datastream_id = {detections_id};", fetch=False)
 
-    def test_70_propagate_to_ckan(self):
-        if not self.ckan_test:
-            self.skipTest("skip ckan")
-        propagate_metadata_to_ckan(self.mc, self.ckan, self.log, collections=[])
-
-    def test_71_generate_fileserver_datasets(self):
+    def test_70_fileserver_dataset_timeseries(self):
         """Creating a dataset"""
-        if not self.fileserver_test:
-            self.skipTest("skip fileserver")
-
         os.makedirs("datasets", exist_ok=True)
+        if not self.fileserver_test or not self.timeseries_data:
+            self.skipTest("skip fileserver")
 
         # Export datasets with the default format (NetCDF)
         nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", overwrite=True)
         for nc_dataset in nc_datasets:
             self.assertTrue(check_url(nc_dataset.url))
-
         # delete one dataset and ensure that we get an error when accessing it
         file_path = self.dc.fileserver.url2path(nc_datasets[0].url)
         os.remove(file_path)
@@ -2090,28 +2379,69 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             self.assertTrue(check_url(nc_dataset.url))
 
         # Export as CSV datasets
-        csv_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", fmt="csv", overwrite=True)
+        csv_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", overwrite=True, fmt="csv")
         for csv_dataset in csv_datasets:
             self.assertTrue(check_url(csv_dataset.url))
+
+        # Force error in format
+        with self.assertRaises(AssertionError):
+            self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-02-01", fmt="potato")
 
         # Export NetCDF
         nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "fileserver", overwrite=True)
         for nc_dataset in nc_datasets:
             self.assertTrue(check_url(nc_dataset.url))
 
-        # Force error in format
-        with self.assertRaises(AssertionError):
-            self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-02-01", fmt="potato")
+        # Export CSV
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "fileserver", overwrite=True, fmt="csv")
+        for nc_dataset in nc_datasets:
+            self.assertTrue(check_url(nc_dataset.url))
+
+    def test_72_fileserver_dataset_profiles(self):
+        """Creating a dataset"""
+        nc_datasets = self.dc.generate_dataset("awac_full", "fileserver", overwrite=True)
+        for nc_dataset in nc_datasets:
+            self.assertTrue(check_url(nc_dataset.url))
+
+        nc_datasets = self.dc.generate_dataset("awac_30min", "fileserver", overwrite=True)
+        for nc_dataset in nc_datasets:
+            self.assertTrue(check_url(nc_dataset.url))
+
+        nc_datasets = self.dc.generate_dataset("awac_full", "fileserver", overwrite=True, fmt="csv")
+        for nc_dataset in nc_datasets:
+            self.assertTrue(check_url(nc_dataset.url))
+
+        nc_datasets = self.dc.generate_dataset("awac_30min", "fileserver", overwrite=True, fmt="csv")
+        for nc_dataset in nc_datasets:
+            self.assertTrue(check_url(nc_dataset.url))
+
+    def test_74_fileserver_dataset_files(self):
+        """Creating a dataset"""
+        if not self.files_data:
+            self.skipTest("skip files")
 
         zip_datasets = self.dc.generate_dataset("IPC608_pics", "fileserver", "2020-01-01", "2020-02-01")
-        for zip_dataset in zip_datasets:
+        zip_datasets_blue = self.dc.generate_dataset("IPC608_pics_blue", "fileserver", "2020-01-01", "2020-02-01")
+        zip_datasets_red = self.dc.generate_dataset("IPC608_pics_red", "fileserver", "2020-01-01", "2020-02-01")
+
+        zips = zip_datasets + zip_datasets_blue + zip_datasets_red
+
+        for zip_dataset in zips:
             if not zip_dataset:
                 continue
             self.assertTrue(check_url(zip_dataset.url))
 
-        # dwca_dataset = self.dc.generate_dataset("biodiversity_datasets", "fileserver", "2020-01-01", "2020-02-01")
+        dwca_dataset = self.dc.generate_dataset("biodiversity_datasets", "fileserver", "2020-01-01", "2020-02-01")
+        for ds in dwca_dataset:
+            self.assertTrue(check_url(ds.url))
 
-    def test_72_generate_ckan_datasets(self):
+
+    def test_80_propagate_to_ckan(self):
+        if not self.ckan_test:
+            self.skipTest("skip ckan")
+        propagate_metadata_to_ckan(self.mc, self.ckan, self.log, collections=[])
+
+    def test_81_generate_ckan_datasets(self):
         if not self.ckan_test:
             self.skipTest("skip ckan")
         self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01") # default format
@@ -2119,7 +2449,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.dc.generate_dataset("obsea_ctd_30min", "ckan", "2020-01-01", "2021-02-01")
         self.dc.generate_dataset("IPC608_pics", "ckan", "2020-01-01", "2020-02-01")
 
-    def test_80_config_erddap(self):
+    def test_90_config_erddap(self):
         """creates a dataset and upload it to ERDDAP"""
         if not self.erddap_test:
             self.skipTest("skip erddap")
@@ -2150,7 +2480,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             download_file(dataset_url, erddap_dataset)
             df = pd.read_csv(erddap_dataset)
 
-    def test_81_config_erddap_with_daily_data(self):
+    def test_91_config_erddap_with_daily_data(self):
         if not self.erddap_test:
             self.skipTest("skip erddap")
         """creates a dataset with daily files and upload it to ERDDAP"""
@@ -2227,6 +2557,7 @@ class VerboseTestResult(unittest.TestResult):
         self._log_fd = open(self._log_file, 'w')
         test_log_files.append(self._log_file)
         test_name = expand_str(test._testMethodName)
+        print(test_name)
         if redirect_stdout:
             sys.stdout = self._log_fd
             sys.stderr = self._log_fd
