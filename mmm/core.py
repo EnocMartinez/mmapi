@@ -275,7 +275,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
             name = doc["#id"]
             history = get_station_history(mc, name)
             deployments = [h for h in history if h["type"] == "deployment"]
-            prop = load_fields_from_dict(doc, ["platformType", "manufacturer", "contacts", "emsoFacility"])
+            prop = load_fields_from_dict(doc, ["platformType", "manufacturer", "contacts", "oso"])
 
             # Register Thing without location
             description = doc["longName"]

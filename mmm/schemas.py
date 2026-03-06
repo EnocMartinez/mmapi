@@ -350,7 +350,6 @@ __stations = {
         "platformType": __label_definition,
         "manufacturer": __label_definition,
         "contacts": __contacts_with_roles__(__device_roles__),
-        "emsoFacility": {"type": "string"},
         "oso": {
             "type": "object",
             "definition": "OSO ontology is used to describe infrastructure within EMSO and beyond",

@@ -473,6 +473,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "definition": "http://vocab.nerc.ac.uk/collection/L06/current/48/",
                 "label": "mooring"
             },
+            "wmo_number": "6103565",
             "oso": {
                 "regionalFacility": {
                     "label": "Balearic Sea",
@@ -487,7 +488,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "definition": ""
                 }
             },
-            "emsoFacility": "Balearic Sea",
             "contacts": [
                 {
                     "@people": "enoc_martinez",

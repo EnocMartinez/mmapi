@@ -9,7 +9,7 @@ license: MIT
 created: 4/10/23
 """
 
-from ..common import LoggerSuperclass, PRL
+from ..common import LoggerSuperclass, PRL, assert_type
 import psycopg2
 import time
 import pandas as pd
@@ -254,3 +254,22 @@ class PgDatabaseConnector(LoggerSuperclass):
         if dbname in databases:
             return True
         return False
+
+
+def sql_list(elements: list, string=True) -> str:
+    """
+    Converts a list in python3 to a SQL list e.g. ["hola", "que", "tal"] --> "('hola', 'que', 'tal')"
+    :param elements:
+    :return:
+    """
+    assert_type(elements, list)
+    if string:
+        [assert_type(s, str) for s in elements]
+
+    if string:
+        elements = [f"'{s}'" for s in elements]
+    else:
+        elements = [str(e) for e in elements]
+
+    joined_elements = ", ".join(elements)
+    return f"({joined_elements})"

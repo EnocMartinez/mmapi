@@ -20,8 +20,11 @@ import os
 
 # Structure to store the generated resources. Some datasets may have dependencies
 
+# TODO fix dataset generation time coverage
+# TODO fix broken --overwrite flag
+
 def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, secrets, log: logging.Logger,
-                     current=False, format:str= "", verbose=False, erddap_config=False, overwrite=False, deliver=True,
+                     current=True, format:str= "", verbose=False, erddap_config=False, overwrite=False, deliver=True,
                      resources=[]):
     """
     Generate a dataset following the configuration in the metadata database dataset register.
@@ -46,8 +49,8 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
     mc = init_metadata_collector(secrets, log=log)
     dc = DataCollector(secrets, log, mc=mc)
 
-    dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, current=current,
-                        overwrite=overwrite, erddap_config=erddap_config, resources=resources, deliver=deliver)
+    dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, current=current, secrets=secrets,
+                        overwrite=overwrite, erddap_config=erddap_config, resources=resources, deliver=deliver,)
 
 def list_datasets(secrets, verbose=False):
     with open(secrets) as f:

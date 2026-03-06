@@ -530,3 +530,47 @@ def assert_types(obj, valid_types: list):
     valid_string = ", ".join([str(t) for t in valid_types])
     valid_string = valid_string.replace("<class ", "").replace(">", "")
     assert type(obj) in valid_types, f"Expected on of {valid_string}, but got {type(obj)} instead"
+
+
+def __get_nested_dict(d, path):
+    """Get a value from a nested dict using '/' separated path."""
+    keys = path.split("/")
+    for key in keys:
+        if not isinstance(d, dict) or key not in d:
+            return None, False
+        d = d[key]
+    return d, True
+
+def __set_nested_dict(d, path, value):
+    """Set a value in a nested dict using '/' separated path."""
+    keys = path.split("/")
+    for key in keys[:-1]:
+        d = d.setdefault(key, {})
+    d[keys[-1]] = value
+
+
+def populate_dict(src: dict, dest: dict, terms: dict):
+    """
+    Populate dict 'src' with values from dict 'b' based on a source/destination mapping.
+
+    Args:
+        src (dict): Source dictionary to populate.
+        dest (dict): Destination dictionary to read values from.
+        terms (dict): Mapping of source paths (in 'b') to destination paths (in 'a').
+                      Use '/' as separator for nested keys (e.g. "nested/element").
+                      Keys not found in 'b' are silently skipped.
+
+    Example:
+        src = {"a": "1", "nested": {"element": "2"}}
+        terms = {"a": "newa", "nested/element": "nest/el"}
+        dest = {}
+        populate_args(src, dest, terms)
+        # dest -> {"newa": "1", "nest": {"el": "2"}}
+    """
+    assert_type(dest, dict)
+    assert_type(src, dict)
+    assert_type(terms, dict)
+    for source, destination in terms.items():
+        value, found = __get_nested_dict(src, source)
+        if found:
+            __set_nested_dict(dest, destination, value)

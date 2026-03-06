@@ -22,9 +22,10 @@ import os
 from .darwin_core import DarwinCoreArchive
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
-from .common import check_url, run_over_ssh, LoggerSuperclass, assert_types, GRN, RST, assert_type
+from .common import check_url, run_over_ssh, LoggerSuperclass, assert_types, GRN, RST, assert_type, populate_dict
 from .data_sources.postgresql import sql_list
-from .data_manipulation import merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals, pivot_dataframe
+from .data_manipulation import merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals, pivot_dataframe, \
+    df_netcdf_normalization
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
 from mmm.dataset import DatasetObject
@@ -115,7 +116,7 @@ class DataCollector(LoggerSuperclass):
         filename += extensions[fmt]
         return os.path.join(tmp_folder, filename)
 
-    def get_dataset_type(self, dataset) -> (str, bool|None, str):
+    def get_dataset_type(self, dataset, data_type) -> (str, bool|None, str):
         """
         From the information of a dataset determines the dataType of the dataset, the fullData flag and the period.
         If fullData is defined it will be returned, if it's not defined a None value will be returned.
@@ -123,7 +124,6 @@ class DataCollector(LoggerSuperclass):
         :return: (dataType, fullData, period)
         """
         assert_type(dataset, dict)
-        data_type = dataset["dataType"]
         try:
             full_data = dataset["dataSourceOptions"]["fullData"]
         except KeyError as e:
@@ -141,14 +141,14 @@ class DataCollector(LoggerSuperclass):
 
         return data_type, full_data, period
 
-    def get_dataset_datastream_ids(self, dataset) -> list:
+    def get_dataset_datastream_ids(self, dataset, data_type) -> list:
         """
         Return a list of datastream_ids that are relevant to a specific dataset
         :param dataset:  dataset configuration
         :return: list of IDs
         """
         assert_type(dataset, dict)
-        data_type, full_data, average_period = self.get_dataset_type(dataset)
+        data_type, full_data, average_period = self.get_dataset_type(dataset, data_type)
 
         sensors = dataset["@sensors"]
         stations = dataset["@stations"]
@@ -166,7 +166,7 @@ class DataCollector(LoggerSuperclass):
             and "PROPERTIES"->>'dataType' = '{data_type}'
         """
 
-        if type(full_data) != type(None):
+        if type(full_data) != type(None) and data_type in ["timeseries", "profiles"]:
             q += f"and \"PROPERTIES\"->>'fullData' = '{str(full_data).lower()}' \n"
 
         if average_period:
@@ -179,7 +179,7 @@ class DataCollector(LoggerSuperclass):
         q += ";"
         return self.sta.list_from_query(q, debug=False)
 
-    def get_dataset_time_coverage(self, dataset: dict) -> (pd.Timestamp, pd.Timestamp):
+    def get_dataset_time_coverage(self, dataset: dict, data_type) -> (pd.Timestamp, pd.Timestamp):
         """
         Looks for the first timestamp where there is data from a dataset
         :param dataset: dataset configuration
@@ -187,9 +187,10 @@ class DataCollector(LoggerSuperclass):
         """
         assert_type(dataset, dict)
         # Step 1: Get the list of datastreams that will be used in this dataset
-        datastream_ids = self.get_dataset_datastream_ids(dataset)
+        datastream_ids = self.get_dataset_datastream_ids(dataset, data_type)
+
         self.debug(f"dataset {dataset['#id']} uses the following datastream_ids = {datastream_ids}")
-        data_type, full_data, avg_period = self.get_dataset_type(dataset)
+        data_type, full_data, avg_period = self.get_dataset_type(dataset, data_type)
 
         # If timeseries with no average
         if data_type in ["timeseries", "profiles", "detections"] and not avg_period:
@@ -248,50 +249,60 @@ class DataCollector(LoggerSuperclass):
                 self.error("CKAN not initialized!", exception=ValueError)
             return self.ckan.process_mmapi_dataset(conf, resources=resources)
 
-        # Force the start and end in the current period, e.g. if "monthly" and now is 2024-12-12 the period
-        # will be from 2024-12-01T00:00:00Z to 2025-01-01T00:00:00Z
-        if current:
-            try:
-                period = conf["export"][service_name]["period"]
-            except KeyError:
-                raise ValueError(f"Could not access period for dataset_id='{dataset_id}' service='{service_name}'")
 
-            time_start, time_end = get_current_dateset_dates(period)
-
-        if not time_start and not time_end:
-            # No time range supplied, trying to extract it from the dataset constraints
-            try:
-                trange = conf["constraints"]["timeRange"]
-                time_start, time_end = trange.split("/")
-            except KeyError:
-                self.warning("Time range not defined! Look for first and last measures")
-                time_start, time_end = self.get_dataset_time_coverage(conf)
-                self.info(f"Getting data from {time_start} to {time_end}")
-            except Exception as e:
-                raise e
-
-        if type(time_start) is str:
-            time_start = pd.Timestamp(time_start)
-        if type(time_end) is str:
-            time_end = pd.Timestamp(time_end)
-
-        if not time_start.tzinfo:
-            time_start = pd.Timestamp.tz_localize(time_start, "utc")
-        if not time_end.tzinfo:
-            time_end = pd.Timestamp.tz_localize(time_end, "utc")
-
-        if time_start and time_end and time_start > time_end:
-            raise ValueError(f"Time start={time_start} greater than time end={time_end}")
         datasets = []
 
         self.info(f"Creating resource for service {GRN}{service_name}{RST} and dataset {GRN}{dataset_id}{RST}")
         for resource in conf["export"][service_name]["resources"]:
+
             resource_id = resource["id"]
             if resources and  resource_id not in resources:
                 self.warning(f"Ignoring resource {resource_id}")
                 continue
             else:
                 self.info(f"Keeping resource {resource_id}")
+
+            data_type = resource["dataType"]
+
+            # === Estimating the time range ==== #
+
+            # Force the start and end in the current period, e.g. if "monthly" and now is 2024-12-12 the period
+            # will be from 2024-12-01T00:00:00Z to 2025-01-01T00:00:00Z
+            # TODO: clean the mess regarding the dataset time coverage
+            if current:
+                try:
+                    period = conf["export"][service_name]["period"]
+                except KeyError:
+                    raise ValueError(f"Could not access period for dataset_id='{dataset_id}' service='{service_name}'")
+
+                time_start, time_end = get_current_dateset_dates(period)
+
+            if not time_start and not time_end:
+                # No time range supplied, trying to extract it from the dataset constraints
+                try:
+                    trange = conf["constraints"]["timeRange"]
+                    time_start, time_end = trange.split("/")
+                except KeyError:
+                    self.warning("Time range not defined! Look for first and last measures")
+                    time_start, time_end = self.get_dataset_time_coverage(conf, data_type)
+                    self.info(f"Getting data from {time_start} to {time_end}")
+                except Exception as e:
+                    raise e
+
+            if type(time_start) is str:
+                time_start = pd.Timestamp(time_start)
+            if type(time_end) is str:
+                time_end = pd.Timestamp(time_end)
+
+            if not time_start.tzinfo:
+                time_start = pd.Timestamp.tz_localize(time_start, "utc")
+            if not time_end.tzinfo:
+                time_end = pd.Timestamp.tz_localize(time_end, "utc")
+
+            if time_start and time_end and time_start > time_end:
+                raise ValueError(f"Time start={time_start} greater than time end={time_end}")
+
+            # ============================= #
 
             if resource["period"] == "none":
                 d = self.generate_dataset_file(conf, service_name, resource, time_start, time_end, fmt=fmt, overwrite=overwrite)
@@ -316,9 +327,15 @@ class DataCollector(LoggerSuperclass):
                 self.warning(f"Not registering in metadata database datasets in fileserver_dataset_registry!")
 
         if service_name == "erddap" and erddap_config:
+            try:
+                dataset_xml_path = secrets["erddap"]["datasets_xml"]
+                dataset_xml_path = secrets["erddap"]["datasets_xml"]
+            except KeyError:
+                self.error("Could not access datasets.xml path in secrets!", exception=ValueError)
+
             self.info("Trying to autoconfigure ERDDAP dataset (using last dataset)")
             dataset.configure_erddap_remotely(
-                secrets["erddap"]["datasets_xml"],
+                dataset_xml_path,
                 big_parent_directory=secrets["erddap"]["big_parent_directory"],
                 erddap_uid=secrets["erddap"]["uid"]
             )
@@ -350,7 +367,7 @@ class DataCollector(LoggerSuperclass):
                 self.warning(f"Dataset constraint Forces end time to {ctime_end}")
         else:
             # get the minimum and maximum time in the data
-            coverage_start, coverage_end = self.get_dataset_time_coverage(dataset)
+            coverage_start, coverage_end = self.get_dataset_time_coverage(dataset, resource["dataType"])
 
             if coverage_start > time_start:
                 time_start = coverage_start
@@ -415,7 +432,6 @@ class DataCollector(LoggerSuperclass):
         # Check if the data already exists
 
         dataset_resource_id = resource["id"]
-
         if not overwrite and self.mc.dataset_resource_exists(dataset_resource_id):
             if overwrite:
                 # Just throw a warning and continue
@@ -423,8 +439,6 @@ class DataCollector(LoggerSuperclass):
             else:
                 self.error(f"Data resource already exists '{dataset_resource_id}', use the --overwrite flag to overwrite it")
                 return
-        else:
-            self.info(f"Creating new dataset resource: {dataset_resource_id}")
 
         if fmt == "csv":
             filename, delivered = self.csv_from_sta(conf, resource, time_start, time_end)
@@ -454,12 +468,12 @@ class DataCollector(LoggerSuperclass):
         if data_type == "timeseries":
             return self.dataframe_from_sta_timeseries(conf, resource, station_ids, sensor_ids, time_start, time_end)
         elif data_type == "detections":
-            df = self.dataframe_from_sta_detections(conf, resource, station, sensor, time_start, time_end)
+            df = self.dataframe_from_sta_detections(conf, resource, station_ids, sensor_ids, time_start, time_end)
             return df
         elif data_type == "profiles":
             return self.dataframe_from_sta_profiles(conf, resource, station_ids, sensor_ids, time_start, time_end)
         elif data_type == "files":
-            return self.dataframe_from_sta_files(conf,resource,  station, sensor, time_start, time_end)
+            return self.dataframe_from_sta_files(conf,resource,  station_ids, sensor_ids, time_start, time_end)
         elif data_type == "json":
             return self.dataframe_from_sta_json(conf, resource,  station_ids, sensor_ids, time_start, time_end)
         else:
@@ -483,7 +497,6 @@ class DataCollector(LoggerSuperclass):
 1      2023-01-01 00:01:40+00:00  None  1.000000        1     None       None     CNDC     SBE37       OBSEA  None
 2      2023-01-01 00:03:20+00:00  None  1.000000        1     None       None     CNDC     SBE37       OBSEA  None
 
-
         This dataset needs to be filtered and pivoted inside the data-specific method.
 
         :param station_ids:
@@ -503,6 +516,9 @@ class DataCollector(LoggerSuperclass):
         [assert_type(s, str) for s in station_ids]
         [assert_type(s, str) for s in sensor_ids]
         [assert_type(s, str) for s in fois]
+        assert_types(tstart, [type(None), pd.Timestamp])
+        assert_types(tend, [type(None), pd.Timestamp])
+
         assert data_type in mmapi_data_types, f"data type '{data_type}' not valid'"
 
         # Check incompatible arguments
@@ -576,13 +592,12 @@ class DataCollector(LoggerSuperclass):
 
             if tstart:
                 query = query.replace("--time-start-filter", f"""    and "OBSERVATIONS"."PHENOMENON_TIME_START" >= '{tstart.strftime(iso_format)}'""")
-            if tstart:
-                query = query.replace("--time-start-filter", f"""    and "OBSERVATIONS"."PHENOMENON_TIME_END" < '{tend.strftime(iso_format)}'""")
+            if tend:
+                query = query.replace("--time-end-filter", f"""    and "OBSERVATIONS"."PHENOMENON_TIME_END" < '{tend.strftime(iso_format)}'""")
             if fois:
                 foi_ids = self.sta.list_from_query(f"""select "ID" from "FEATURES" where "NAME" in {sql_list(fois)};""")
                 query = query.replace("--foi-filter",
                               f"""    and "OBSERVATIONS"."FEATURE_ID" in {sql_list(foi_ids, string=False)}""")
-
 
             df = self.sta.dataframe_from_query(query)
 
@@ -618,8 +633,8 @@ class DataCollector(LoggerSuperclass):
 
             if tstart:
                 query = query.replace("--time-start-filter", f"""    and timestamp >= '{tstart.strftime(iso_format)}'""")
-            if tstart:
-                query = query.replace("--time-start-filter", f"""    and timestamp < '{tend.strftime(iso_format)}'""")
+            if tend:
+                query = query.replace("--time-end-filter", f"""    and timestamp < '{tend.strftime(iso_format)}'""")
 
             df = self.sta.dataframe_from_query(query)
 
@@ -669,83 +684,45 @@ class DataCollector(LoggerSuperclass):
         df = pivot_dataframe(df, pivot_cols=["value", "qc_flag"])
         return df.set_index("timestamp")
 
-    def dataframe_from_sta_files(self, conf: dict, resource: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
+    def dataframe_from_sta_files(self, conf: dict, resource: dict, station_ids: list, sensor_ids: list,  time_start: pd.Timestamp = None,
                                       time_end: pd.Timestamp = None):
         """
         Returns a DataFrame for a specific Sensor in a specific time interval
         """
+        assert_type(station_ids, list)
+        assert_type(sensor_ids, list)
+        [assert_type(s, str) for s in station_ids]
+        [assert_type(s, str) for s in sensor_ids]
+        data_type = resource["dataType"]
 
+        keep_foi = False
+        try:
+            keep_foi = conf["dataSourceOptions"]["keepFieldOfView"]
+        except KeyError:
+            self.debug(f"keepFieldOfView not in options, default={keep_foi}")
+            pass
 
-        sensor_name = sensor["#id"]
-        station_name = station["#id"]
+        df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, tstart=time_start, tend=time_end)
+        # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
 
-        variables = []  # by default all variables will be used
-        if "@variables" in conf.keys():
-            variables = conf["@variables"]
+        df = df[["timestamp", "depth", "sensor_id", "platform_id", "value", "variable", "foi"]]
 
+        # TODO: Now we keep only the last position. Go through the entire lifetime to get the proper values
+        stations = df["platform_id"].unique()
+        for station in stations:
+            latitude, longitude, depth = self.mc.get_station_coordinates(station)
+            print(latitude, longitude, depth)
+            df.loc[df["platform_id"] == station, "depth"] = depth
 
-        # Get the THING_ID from SensorThings based on the Station name
-        thing_id = self.sta.value_from_query(
-            f'select "ID" from "THINGS" where "NAME" = \'{station_name}\';'
-        )
-        sensor_id = self.sta.value_from_query(
-            f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';'
-        )
-        # Super query that returns all varname and datastream_id  for one station-sensor combination
-        # Results are stored as a DataFrame
-        query = f'''select 
-                "OBS_PROPERTIES"."NAME" as varname, 
-                "DATASTREAMS"."ID" as datastream_id                    
-            from  
-                "DATASTREAMS"
-            left join 
-                "OBS_PROPERTIES"
-            on 
-                "DATASTREAMS"."OBS_PROPERTY_ID" = "OBS_PROPERTIES"."ID"
-            where                
-                "DATASTREAMS"."SENSOR_ID" = {sensor_id} and "DATASTREAMS"."THING_ID" = {thing_id}                                    
-            '''
+        df = pivot_dataframe(df, pivot_cols=["value"])
 
-        query += ";"
-        datastreams = self.sta.dataframe_from_query(query)
-        sensor_dataframes = []
-        for idx, ds in datastreams.iterrows():
-            # ds is a dict with 'varname', 'datastream_id' and 'data_type'
-            datastream_id = ds["datastream_id"]
-            varname = ds["varname"]
-            if variables and varname not in variables:
-                continue
+        if keep_foi:
+            df = df.rename(columns={"foi": "fieldOfView"})
+        else:
+            del df["foi"]
 
-            data_columns = {
-                "json": "RESULT_JSON",
-                "files": "RESULT_STRING"
-            }
-            col = data_columns[resource["dataType"]]
+        return df.set_index("timestamp")
 
-            # Query the regular OBSERVATIONS table
-            q = (f'''
-                select
-                    "PHENOMENON_TIME_START" as timestamp,
-                    "{col}" as "{varname}"      
-                from
-                    "OBSERVATIONS"
-                where
-                    "DATASTREAM_ID" = {datastream_id}
-                    and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
-            ''')
-            df = self.sta.dataframe_from_query(q, debug=False)
-
-            if not df.empty:
-                sensor_dataframes.append(df)
-
-        if not sensor_dataframes:
-            return pd.DataFrame()  # return an empty dataframe
-
-        df = merge_dataframes_by_columns(sensor_dataframes)
-        df = df.rename(columns={"timestamp": "TIME"})
-        df = df.set_index("TIME")
-        df = df.sort_index(ascending=True)
-        return df
 
     def dataframe_from_sta_json(self, conf: dict, resource: dict, station_ids: list, sensor_ids: list, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
         """
@@ -776,12 +753,18 @@ class DataCollector(LoggerSuperclass):
         :param time_end: time start
         :return: generated NetCDF filename
         """
-        self.debug("Creating NetCDF dataset")
-        min_times = []
-        max_times = []
-        dataframes = []  # list with a dataframe per variable
+        msg = f"Creating NetCDF dataset for {conf['#id']}, resource={resource['id']}"
+        if time_start:
+            msg += f" start={time_start}"
+
+        if time_end:
+            msg += f" end={time_end}"
+
+        self.info(msg)
         metadata = self.metadata_harmonizer_conf(conf)
         df = self.dataframe_from_sta(conf, conf["@stations"], conf["@sensors"], resource, time_start=time_start, time_end=time_end)
+        df = df_netcdf_normalization(df)  # Ensure we have correct strings
+
         if df.empty:
             self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
             return "", False
@@ -790,7 +773,7 @@ class DataCollector(LoggerSuperclass):
         filename = self.dataset_filename(conf, "netcdf", df.index[0], df.index[-1])
         self.info("Calling NetCDF wrapper...")
         filename = self.call_dataset_generator(conf, [df], metadata, output=filename)
-
+        print(df)
         self.info(f"Dataset {filename} generated!")
         return filename, False
 
@@ -1042,17 +1025,18 @@ class DataCollector(LoggerSuperclass):
         data_mode_dict = {"real-time": "R", "delayed": "D", "mixed": "M", "provisional": "P"}
         dm = data_mode_dict[data_mode]
 
+        edmo_code = owner["EDMO"]
+        if edmo_code.startswith("http"):
+            edmo_code = edmo_code.split("/")[-1]
         meta = {
             "global": {
                 "title": dataset["title"],
                 "summary": dataset["summary"],
                 "Conventions": "OceanSITES EMSO CF-1.8",
                 "institution": institution_str,
-                "institution_edmo_code": owner["EDMO"],
+                "institution_edmo_code": edmo_code,
                 "institution_ror_uri": owner["ROR"],
                 "update_interval": "void",
-                "emso_site_name": station["longName"],
-                "emso_regional_facility_name": station["emsoFacility"],
                 "source": station["platformType"]["label"],
                 "data_type": "OceanSITES profile data",
                 "format_version": "1.4",
@@ -1071,15 +1055,12 @@ class DataCollector(LoggerSuperclass):
             "variables": {}
         }
 
-        try:
-            meta["global"]["emso_regional_facility_name"] = station["oso"]["regionalFacility"]["label"]
-        except KeyError:
-            self.warning("Could not get oso/regionalFacility/label")
 
-        try:
-            meta["global"]["emso_site_name"] = station["oso"]["site"]["label"]
-        except KeyError:
-            self.warning("Could not get oso/site/label")
+        optional_args = {
+            "oso/regionalFacility/label": "emso_regional_facility_name",
+            "oso/site/label": "emso_site_name"
+        }
+        populate_dict(station, meta["global"], optional_args)
 
         for sensor in sensors:
             sensor_id = sensor["#id"].replace("-", "_")
@@ -1109,12 +1090,27 @@ class DataCollector(LoggerSuperclass):
         for variable_id, units in units.items():
             variable = self.mc.get_document("variables", variable_id)
             varname = variable_id.replace("-", "_").replace(" ", "_")
-            meta["variables"][varname] = {
-                "long_name": variable["description"],
-                "sdn_parameter_uri": variable["definition"],
-                "sdn_uom_uri": units["definition"],
-                "standard_name": variable["standard_name"],
-            }
+
+            if variable["type"] == "environmental":
+                meta["variables"][varname] = {
+                    "long_name": variable["description"],
+                    "sdn_parameter_uri": variable["definition"],
+                    "sdn_uom_uri": units["definition"],
+                    "standard_name": variable["standard_name"],
+                }
+            elif variable["type"] == "biological":
+                raise ValueError("Unimplemented!")
+            
+            elif variable["type"] == "technical":
+                meta["variables"][varname] = {
+                    "long_name": variable["description"],
+                    "standard_nme": variable["standard_name"],
+                }
+            else:
+                raise ValueError(f"Type '{variable['type']}' not valid!")
+
+
+
         for station_id in dataset["@stations"]:
             platform = self.mc.get_document("stations", station_id)
             platform_name = station_id.replace("-", "_").replace(" ", "_")
@@ -1131,11 +1127,13 @@ class DataCollector(LoggerSuperclass):
                 "latitude": latitude,
                 "longitude": longitude
             }
+
             # Fill optional arguments
-            optional_args = {"wmo_number": "wmo_platform_code"}
-            for key, value in optional_args.items():
-                if key in station.items() and station[key]:
-                    meta["platforms"][platform_name][key] = station[value]
+            optional_args = {
+                "wmo_number": "wmo_platform_code",
+                "oso/platform/label": "emso_platform_name",
+            }
+            populate_dict( platform,  meta["platforms"][platform_name], optional_args)
 
         return meta
 

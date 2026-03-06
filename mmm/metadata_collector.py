@@ -11,6 +11,7 @@ created: 30/11/22
 """
 import logging
 import time
+from typing import Tuple
 
 import jsonschema
 from numpy.core.defchararray import upper
@@ -114,7 +115,7 @@ def postgres_results_to_dict(results, time_format="%Y-%m-%dT%H:%M:%SZ"):
 
 
 class MetadataCollector(LoggerSuperclass):
-    def __init__(self, connection: {}, default_author: str, organization: str, log: logging.Logger):
+    def __init__(self, connection: dict, default_author: str, organization: str, log: logging.Logger):
         """
         Initializes a connection to a PostgresQL database hosting metadata
         :param connection: connection string
@@ -675,7 +676,7 @@ class MetadataCollector(LoggerSuperclass):
         raise ValueError("Unimplemented")
 
 
-    def get_contact_by_role(self, doc: dict, role: str) -> {dict, str}:
+    def get_contact_by_role(self, doc: dict, role: str) -> Tuple[dict, str]:
         """
         Loops through the contacts section in a document and returns the id and the collection type (organization or
         people) of the first contact that has a certain role.
@@ -829,7 +830,7 @@ class MetadataCollector(LoggerSuperclass):
         else:
             self.info(f"  =) =) Congratulations! You have a healthy database (= (=\n")
 
-    def get_station_position(self, station_name: str, timestamp: pd.Timestamp = None) -> (float, float, float):
+    def get_station_position(self, station_name: str, timestamp: pd.Timestamp = None) -> Tuple[float, float, float]:
         """
         Returns (latitude, longitude, depth) for a station at a particular time. It looks for all deployments of a
         station and selects the one immediately before the selected time. If timestamp is null return the last
@@ -888,7 +889,7 @@ class MetadataCollector(LoggerSuperclass):
             for doc in docs:
                 self.delete_document(col, doc["#id"], history=True)
 
-    def get_last_sensor_deployment(self, sensor_id) -> (str, pd.Timestamp, bool):
+    def get_last_sensor_deployment(self, sensor_id) -> Tuple[str, pd.Timestamp, bool]:
         """
         Returns the name of the last station where this sensor was deployed
         :return: station_id and timestamp
@@ -918,7 +919,7 @@ class MetadataCollector(LoggerSuperclass):
         return doc["where"]["@stations"], deployment_t, active
 
 
-    def get_last_sensor_recovery(self, sensor_id) -> (pd.Timestamp):
+    def get_last_sensor_recovery(self, sensor_id) -> pd.Timestamp:
         """
         Returns the timestamp of the last recovery (or loss)
         :param sensor_id:
@@ -936,7 +937,7 @@ class MetadataCollector(LoggerSuperclass):
         return pd.Timestamp(doc["time"])
 
 
-    def __get_deployments(self, element_type, identifier) -> []:
+    def __get_deployments(self, element_type, identifier) -> list:
         # Get all activities and involving this station
         sql_filter = f"where doc->'appliedTo'->>'@{element_type}' = '{identifier}'"
         hist = self.get_documents("activities", filter=sql_filter)
@@ -1041,7 +1042,7 @@ class MetadataCollector(LoggerSuperclass):
             deployments = deployments_inside_interval
         return deployments
 
-    def get_sensor_deployment(self, sensor: dict|str, timestamp: pd.Timestamp) -> (float, float, float, dict):
+    def get_sensor_deployment(self, sensor: dict|str, timestamp: pd.Timestamp) -> Tuple[float, float, float, dict]:
         """Gets the sensor deployment at a certain moment in time
 
         return latitude, longitude, depth and a dict with options like "fieldOfView"
@@ -1101,13 +1102,14 @@ class MetadataCollector(LoggerSuperclass):
 
         return deployments
 
-    def get_station_coordinates(self, station: any, timestamp=None) -> (float, float, float):
+    def get_station_coordinates(self, station: dict|str, timestamp=None) -> Tuple[float, float, float]:
         """
         Looks for the latest coordinates of a station based on its deployment history. Station may be station_id (str) or
         the station document (dict)
         :param mc: Metadata collector
         :param station: station or station:D
         :param timestamp: if set, get the coordinates in a specific timestamp
+        :return latitude, longitude, depth
         """
         if type(station) is str:
             station = self.get_document("stations", station)

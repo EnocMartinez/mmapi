@@ -812,7 +812,7 @@ def __pivot_dataframe(df, pivot_cols, pivot_on="variable"):
 
     # All columns except pivot_cols and pivot_on become the index
     index_cols = [c for c in df.columns if c not in pivot_cols + [pivot_on]]
-
+    print(f"index={index_cols}, columns={pivot_on}, values={pivot_cols}")
     df_wide = df.pivot(index=index_cols, columns=pivot_on, values=pivot_cols)
 
     # Flatten multi-level columns: first col in pivot_cols -> var name only, rest -> var_colname
@@ -872,3 +872,19 @@ def __pivot_dataframe_depth(df, pivot_cols, pivot_on="variable", depth_col="dept
     df_wide = df_wide.sort_values(index_cols).reset_index(drop=True)
 
     return df_wide
+
+
+def df_netcdf_normalization(df):
+    """
+    Converts column names containing '-' to '_', and replaces '-' with '_'
+    in the values of 'platform_id' and 'sensor_id' columns.
+
+    This is required to generate NetCDF files.
+    """
+    df.columns = [col.replace('-', '_') for col in df.columns]
+
+    for col in ('platform_id', 'sensor_id'):
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace('-', '_', regex=False)
+
+    return df
