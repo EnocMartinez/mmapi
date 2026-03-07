@@ -9,14 +9,16 @@ license: MIT
 created: 1/12/23
 """
 import logging
+from typing import Tuple
 
 import pandas as pd
 import rich
 from rich.progress import Progress
-from mmm.common import qc_flags, assert_type
+from mmm.common import qc_flags, assert_type, assert_types
 import numpy as np
 import gc
 from mmm.parallelism import multiprocess
+from mmm.schemas import dataset_exporter_periods
 
 
 def open_csv(csv_file, time_format="", time_range=[], format=False) -> pd.DataFrame:
@@ -709,51 +711,36 @@ def slice_and_process(df, handler, args, frequency="M", max_workers=20, text="pr
     processed_df = multiprocess(arguments, handler, max_workers=max_workers, text=text)
     return merge_dataframes(processed_df)
 
-def ceil_month(t):
-    """"
-    Ceil a Timestamp to month (not implemented in pandas)
-    """
-    init_month = t.month
-    t.ceil("1D")
-    while t.month == init_month:
-        t += pd.Timedelta("1D")
-    t = t.floor("1D")
-    return t
 
-
-def ceil_year(t):
-    """"
-    Ceil a Timestamp to year (not implemented in pandas)
-    """
-    init_year = t.year
-    t.ceil("1D")
-    while t.year == init_year:
-        t += pd.Timedelta("1D")
-    t = t.floor("1D")
-    return t
-
-
-def ceil_timestamp(t: pd.Timestamp, period: str) -> pd.Timestamp:
-    """
-    Ceils a timestamp, handling day, month and year periods
-    :param t: timestamp
-    :param period: period to split, can be 'daily', 'monthly' or 'yearly'
-    :param period: period to split, can be 'daily', 'monthly' or 'yearly'
-    """
-    assert_type(t, pd.Timestamp)
-    if period == "daily":
-        t = t + pd.Timedelta("1D")
-        t = t.floor("1D")
-        return t
+def ceil_timestamp(ts: pd.Timestamp, period: str) -> pd.Timestamp:
+    if period == "yearly":
+        floored = ts.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
+        if ts == floored:
+            return ts
+        return floored + pd.DateOffset(years=1)
     elif period == "monthly":
-        return ceil_month(t)
-    elif period == "yearly":
-        return ceil_year(t)
+        floored = ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
+        if ts == floored:
+            return ts
+        return floored + pd.DateOffset(months=1)
+    elif period == "daily":
+        return ts.ceil("D")
     else:
-        ValueError(f"Unexpected period '{period}'")
+        raise ValueError(f"Unknown period: {period}")
 
 
-def calculate_time_intervals(start_time: pd.Timestamp, end_time: pd.Timestamp, period: str) -> [(pd.Timestamp, pd.Timestamp),]:
+def floor_timestamp(ts: pd.Timestamp, period: str) -> pd.Timestamp:
+    if period == "yearly":
+        return ts.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
+    elif period == "monthly":
+        return ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
+    elif period == "daily":
+        return ts.floor("D")
+    else:
+        raise ValueError(f"Unknown period: {period}")
+
+
+def calculate_time_intervals(start_time: pd.Timestamp, end_time: pd.Timestamp, period: str) -> list:
     """
     Splits a time range into smaller intervals according to period. It will always fit to the beginning of the next day,
     month, day. As example period 2023-06-01T03:12:00Z/'2023-06-03T12:00:00Z separated daily will be:
@@ -766,31 +753,81 @@ def calculate_time_intervals(start_time: pd.Timestamp, end_time: pd.Timestamp, p
     :param start_time: start of the interval
     :param end_time: end of the interval
     :param period: period to split, can be 'daily', 'monthly' or 'yearly'
-    :returns: list of tuples with (time_start, time_end)
+    :returns: list of tuples with [(time_start, time_end),]
     """
     assert type(start_time) is pd.Timestamp, f"expected pd.Timestamp, got {type(start_time)}"
     assert type(end_time) is pd.Timestamp, f"expected pd.Timestamp, got {type(end_time)}"
     assert type(period) is str, f"expected str, got {type(end_time)}"
+    assert period in dataset_exporter_periods
+
+    log = logging.getLogger()
+    if period == "none":
+        log.debug("calculate_time_intervals with no period, return [start, end]")
+        return [(start_time, end_time),]
+
+    log.debug(f"Input start_time={start_time}, end_time={end_time}, period={period}")
+
+    start = floor_timestamp(start_time, period)
+    end = ceil_timestamp(end_time, period)
+    log.debug(f"Flooring initial time_start to {start}")
+    log.debug(f"Ceiling initial time_end to {end}")
+
+    if period == "yearly":
+        offset = pd.DateOffset(years=1)
+    elif period == "monthly":
+        offset = pd.DateOffset(months=1)
+    elif period == "daily":
+        offset = pd.DateOffset(days=1)
+    else:
+        raise ValueError(f"Unknown period: {period}")
 
     intervals = []
-    partial_time_start = ceil_timestamp(start_time, period)
-    if partial_time_start != start_time:
-        intervals.append([start_time, partial_time_start])
-
-    while partial_time_start < end_time:
-        partial_end_time = ceil_timestamp(partial_time_start, period)
-        intervals.append((partial_time_start, partial_end_time))
-        partial_time_start = partial_end_time
+    current = start
+    i = 0
+    while current < end:
+        next_ts = current + offset
+        intervals.append((current, next_ts))
+        log.debug(f"interval {i:02d} - from {current} to {next_ts}")
+        current = next_ts
+        i += 1
 
     return intervals
 
 
+def ensure_timestamp(timestamp: str | pd.Timestamp):
+    """
+    Ensures that timestamp is a valid pd.Timestamp with time zone. If timezone not present force UTC. IF null or empty
+    string, force return an empty string
+    :param timestamp:
+    :return: valid pd.Timestamp OR empy string (not valid timestamp)
+    """
+    assert_types(timestamp, [pd.Timestamp, str, type(None)])
+    if not timestamp:  # keep it as empty string
+        return "" # Force empty string just in case
+
+    if isinstance(timestamp, str):
+        timestamp = pd.Timestamp(timestamp)
+
+    if not timestamp.tzinfo:
+        timestamp = pd.Timestamp.tz_localize(timestamp, "utc")
+    return timestamp
+
 def pivot_dataframe(df, pivot_cols, pivot_on="variable"):
+    log = logging.getLogger()
     try:
-        df = __pivot_dataframe(df, pivot_cols, pivot_on=pivot_on)
-    except ValueError:
-        # if regular pivot did not work, probably we have to pivot taking into account depth columns
-        df = __pivot_dataframe_depth(df, pivot_cols, pivot_on=pivot_on)
+        try:
+            df = __pivot_dataframe(df, pivot_cols, pivot_on=pivot_on)
+        except ValueError:
+            # if regular pivot did not work, probably we have to pivot taking into account depth columns
+            log.info("Regular pivot did not work, try pivot taking depth into account")
+            df = __pivot_dataframe_depth(df, pivot_cols, pivot_on=pivot_on)
+    except ValueError as e:
+        log.error("Cannot pivot table, probably due to duplicated entries, storing duplicates in DUPLICATED-ALL.csv")
+        key_cols = [c for c in df.columns if c not in pivot_cols] + [pivot_on]
+        duplicates_df = df[df.duplicated(subset=key_cols, keep=False)]
+        duplicates_df.to_csv("DUPLICATED.csv", index=False)
+        raise e
+
     return df
 
 def __pivot_dataframe(df, pivot_cols, pivot_on="variable"):
@@ -812,7 +849,6 @@ def __pivot_dataframe(df, pivot_cols, pivot_on="variable"):
 
     # All columns except pivot_cols and pivot_on become the index
     index_cols = [c for c in df.columns if c not in pivot_cols + [pivot_on]]
-    print(f"index={index_cols}, columns={pivot_on}, values={pivot_cols}")
     df_wide = df.pivot(index=index_cols, columns=pivot_on, values=pivot_cols)
 
     # Flatten multi-level columns: first col in pivot_cols -> var name only, rest -> var_colname
@@ -850,7 +886,9 @@ def __pivot_dataframe_depth(df, pivot_cols, pivot_on="variable", depth_col="dept
 
     # Unique identifiers for pivoting
     index_cols = ['timestamp', depth_col] if has_depth else ['timestamp']
-
+    log = logging.getLogger()
+    log.debug(f"\n{df}")
+    log.debug(f"Pivoting dataframe index={index_cols}, columns={pivot_on}, values={pivot_cols}")
     df_wide = df.pivot(index=index_cols, columns=pivot_on, values=pivot_cols)
 
     # Flatten multi-level columns

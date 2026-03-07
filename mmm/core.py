@@ -44,15 +44,9 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, log: log
     """
     Propagates metadata from metadata database to CKAN
 
-    :param mc: MetadataCollector
-    :param ckan: CkanClient object
-    :param collections: list of collections to propagaate
-    :return:
-
     Projects are registered as groups
     Institutions are registered as institutions
     Datasets are registered as packages
-    :return:
     """
     assert (type(mc) is MetadataCollector)
     assert (type(ckan) is CkanClient)
@@ -414,7 +408,8 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
 
 
 def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, foi_name: str, average="",
-                   usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data", missing_data:str ="", station_name="", time_range=None) -> bool:
+                   usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data", missing_data:str ="", station_name="",
+                   time_range=None) -> bool:
     """
     This function performs a bulk load of the data contained in the input file
 

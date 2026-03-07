@@ -463,6 +463,7 @@ erddap_resource = {
         "format": {"type": "string", "enum": dataset_exporter_formats},
         "dataType": __dataset_data_types__,
         "averagePeriod": {"type": "string", "definition": "For averaged timeseries/profiles, select the average period, e.g. 30min"},
+        "@variables": __string_list__
     },
     "required": ["id", "path", "host", "period", "format", "dataType"]
 }
@@ -553,6 +554,7 @@ __datasets = {
                 "fullData": {"type": "boolean"},
                 "averagePeriod": {"type": "string"},
                 "mergeSensors": {"type": "boolean"},
+                "keepFieldOfView": {"type": "boolean"} # Keep the FOI as field of view in the CSV/NetCDF dataset
             }
         },
         "dataMode": {"type": "string", "enum": ["real-time", "delayed", "mixed", "provisional"]},

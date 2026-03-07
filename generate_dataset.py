@@ -14,7 +14,7 @@ from mmm import DataCollector, setup_log, CkanClient
 import yaml
 import rich
 import logging
-from mmm.common import RED, RST
+import pandas as pd
 from mmm.metadata_collector import init_metadata_collector
 import os
 
@@ -24,8 +24,7 @@ import os
 # TODO fix broken --overwrite flag
 
 def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, secrets, log: logging.Logger,
-                     current=True, format:str= "", verbose=False, erddap_config=False, overwrite=False, deliver=True,
-                     resources=[]):
+                     format:str= "", verbose=False, erddap_config=False, overwrite=False, deliver=True, resources=[]):
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -49,7 +48,12 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
     mc = init_metadata_collector(secrets, log=log)
     dc = DataCollector(secrets, log, mc=mc)
 
-    dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, current=current, secrets=secrets,
+    if time_start: time_start = pd.Timestamp(time_start)
+    else: time_start = None
+    if time_end: time_end = pd.Timestamp(time_end)
+    else: time_end = None
+
+    dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, secrets=secrets,
                         overwrite=overwrite, erddap_config=erddap_config, resources=resources, deliver=deliver,)
 
 def list_datasets(secrets, verbose=False):
@@ -68,7 +72,6 @@ if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("dataset_id", help="Dataset ID", type=str)
     argparser.add_argument("services", help="Service name (e.g. ERDDAP, CKAN, etc.)", nargs="+", type=str)
-    argparser.add_argument("--current", help="Generate the current file (e.g. current day or current month)", action="store_true")
     argparser.add_argument("--list", help="List registered datasets and exit", action="store_true")
     argparser.add_argument("--local", help="Do not send to destination server", action="store_true")
     argparser.add_argument("-v", "--verbose", help="verbose output", action="store_true")
@@ -100,8 +103,10 @@ if __name__ == "__main__":
         tend = ""
 
     log = setup_log("gen_dataset", log_level="info")
+    if args.verbose:
+        log.setLevel(logging.DEBUG)
 
     for service in args.services:
         generate_dataset(args.dataset_id, service, tstart, tend, args.secrets, log, format=args.format,
-                         current=args.current, verbose=args.verbose, erddap_config=args.erddap,
-                         overwrite=args.overwrite, resources=args.resources, deliver=deliver)
+                         verbose=args.verbose, erddap_config=args.erddap, overwrite=args.overwrite,
+                         resources=args.resources, deliver=deliver)

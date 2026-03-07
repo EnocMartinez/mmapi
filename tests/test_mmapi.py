@@ -2420,9 +2420,9 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         if not self.files_data:
             self.skipTest("skip files")
 
-        zip_datasets = self.dc.generate_dataset("IPC608_pics", "fileserver", "2020-01-01", "2020-02-01")
-        zip_datasets_blue = self.dc.generate_dataset("IPC608_pics_blue", "fileserver", "2020-01-01", "2020-02-01")
-        zip_datasets_red = self.dc.generate_dataset("IPC608_pics_red", "fileserver", "2020-01-01", "2020-02-01")
+        zip_datasets = self.dc.generate_dataset("IPC608_pics", "fileserver", "2023-01-01", "2024-01-01")
+        zip_datasets_blue = self.dc.generate_dataset("IPC608_pics_blue", "fileserver", "2023-01-01", "2024-01-01")
+        zip_datasets_red = self.dc.generate_dataset("IPC608_pics_red", "fileserver", "2023-01-01", "2024-02-01")
 
         zips = zip_datasets + zip_datasets_blue + zip_datasets_red
 
@@ -2447,7 +2447,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01") # default format
         self.dc.generate_dataset("obsea_ctd_full", "ckan", "2020-01-01", "2021-02-01", fmt="csv") # froce csv
         self.dc.generate_dataset("obsea_ctd_30min", "ckan", "2020-01-01", "2021-02-01")
-        self.dc.generate_dataset("IPC608_pics", "ckan", "2020-01-01", "2020-02-01")
+        self.dc.generate_dataset("IPC608_pics", "ckan", "2023-01-01", "2024-02-01")
 
     def test_90_config_erddap(self):
         """creates a dataset and upload it to ERDDAP"""
