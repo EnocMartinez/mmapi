@@ -18,7 +18,7 @@ import numpy as np
 import zipfile
 import random
 from PIL import Image
-
+import logging
 
 qc_flags = {
     "good": 1,
@@ -46,8 +46,8 @@ __qc_sizes = {
 def plot_trajectory(df, dataset):
     # Example DataFrame with latitude and longitude
     data = {
-        "latitude": df["LATITUDE"],
-        "longitude": df["LONGITUDE"],
+        "latitude": df["latitude"],
+        "longitude": df["longitude"],
     }
     # Example DataFrame with latitude and longitude
 
@@ -96,7 +96,7 @@ def plot_trajectory(df, dataset):
 def plot_timeseries(df):
     df = df.dropna(axis=1, how='all')  # drop columns with ALL nans
     varlist = [c for c in df.columns if not c.endswith("_QC") and not c.endswith("_U") and not c.endswith("_STD")]
-    varlist = [c for c in varlist if c not in ["LATITUDE", "LONGITUDE", "DEPTH", "SENSOR_ID", "TIME"]]
+    varlist = [c for c in varlist if c not in ["latitude", "longitude", "depth", "sensor_id", "platform_id", "time"]]
 
     # Determine number of rows and columns for the subplot grid
     num_vars = len(varlist)
@@ -106,8 +106,8 @@ def plot_timeseries(df):
 
     # Flatten axes array to make it easier to iterate
     axes = axes.flatten()
-
     dataframe = df
+
     # Plot each variable in a separate subplot
     for i, column in enumerate(varlist):
         qc_column = column + "_QC"
@@ -115,8 +115,7 @@ def plot_timeseries(df):
         if qc_column:
             df = dataframe
             for flag in qc_flags.keys():
-
-                df = df[[column, qc_column]]
+                df = dataframe[[column, qc_column]]
                 df = df.dropna(how="any")
                 df[qc_column] = df[qc_column].fillna(0)
                 df[qc_column] = df[qc_column].astype(np.int8)
@@ -148,14 +147,17 @@ def plot_timeseries(df):
 
 
 def open_data_file(filename):
+    logger = logging.getLogger()
     if filename.endswith(".csv"):
+        logger.debug(f"Opening as CSV {filename}")
         df = pd.read_csv(filename)
-        df["TIME"] = pd.to_datetime(df["TIME"])
-        df = df.set_index("TIME")
+        df["time"] = pd.to_datetime(df["time"])
+        df = df.set_index("time")
     elif filename.endswith(".nc"):
-        wf = emh.metadata.dataset.load_nc_data(filename)
+        logger.debug(f"Opening as NetCDF {filename}")
+        wf = emh.WaterFrame.from_netcdf(filename)
         df = wf.data
-        df = df.set_index("TIME")
+        df = df.set_index("time")
     return df
 
 def auto_plotter(filename: str, resource_id: str, dataset: dict):
@@ -168,8 +170,8 @@ def auto_plotter(filename: str, resource_id: str, dataset: dict):
         return mosaic_from_zip(filename, plot_filename)
 
     df = open_data_file(filename)
-    if "LATITUDE" in df.columns and "LONGITUDE" in df.columns:  # make sure that we have lat and lon
-        if len(np.unique(df["LATITUDE"].values)) > 1 or len(np.unique(df["LONGITUDE"].values)) > 1:
+    if "latitude" in df.columns and "longitude" in df.columns:  # make sure that we have lat and lon
+        if len(np.unique(df["latitude"].values)) > 10 or len(np.unique(df["longitude"].values)) > 10:
             # this is a trajectory!
             plt = plot_trajectory(df, dataset)
         else:

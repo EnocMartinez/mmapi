@@ -20,11 +20,13 @@ import os
 
 # Structure to store the generated resources. Some datasets may have dependencies
 
-# TODO fix dataset generation time coverage
 # TODO fix broken --overwrite flag
+# TODO implement last (e.g. last month)
+# TODO implement current (e.g. this month)
+
 
 def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, secrets, log: logging.Logger,
-                     format:str= "", verbose=False, erddap_config=False, overwrite=False, deliver=True, resources=[]):
+                     format:str= "", verbose=False, erddap_config=False, overwrite=False, resources=[]):
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -54,7 +56,7 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
     else: time_end = None
 
     dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, secrets=secrets,
-                        overwrite=overwrite, erddap_config=erddap_config, resources=resources, deliver=deliver,)
+                        overwrite=overwrite, erddap_config=erddap_config, resources=resources)
 
 def list_datasets(secrets, verbose=False):
     with open(secrets) as f:
@@ -74,6 +76,8 @@ if __name__ == "__main__":
     argparser.add_argument("services", help="Service name (e.g. ERDDAP, CKAN, etc.)", nargs="+", type=str)
     argparser.add_argument("--list", help="List registered datasets and exit", action="store_true")
     argparser.add_argument("--local", help="Do not send to destination server", action="store_true")
+    argparser.add_argument("--current", help="Generate current dataset, e.g. if monthly from start to end of the current month", action="store_true")
+    argparser.add_argument("--last", help="Generate last dataset, e.g. if monthly from start to end of the previous month", action="store_true")
     argparser.add_argument("-v", "--verbose", help="verbose output", action="store_true")
     argparser.add_argument("-F", "--force", help="Overwrite any existing dataset", action="store_true")
     argparser.add_argument("-e", "--erddap", help="Configure dataset in erddap", action="store_true")
@@ -106,7 +110,14 @@ if __name__ == "__main__":
     if args.verbose:
         log.setLevel(logging.DEBUG)
 
+    if args.current:
+        raise ValueError("Unimplemented")
+
+    if args.last:
+        raise ValueError("Unimplemented")
+
+
     for service in args.services:
         generate_dataset(args.dataset_id, service, tstart, tend, args.secrets, log, format=args.format,
                          verbose=args.verbose, erddap_config=args.erddap, overwrite=args.overwrite,
-                         resources=args.resources, deliver=deliver)
+                         resources=args.resources)

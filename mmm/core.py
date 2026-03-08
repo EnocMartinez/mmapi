@@ -22,7 +22,8 @@ from mmm.processes import average_process, inference_process
 from mmm.schemas import mmapi_data_types
 
 logging.getLogger('emso_metadata_harmonizer').setLevel(logging.ERROR)
-
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('PIL').setLevel(logging.WARNING)
 
 def get_properties(doc: dict, properties: list) -> dict:
     """

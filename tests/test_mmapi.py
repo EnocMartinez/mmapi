@@ -2210,7 +2210,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "taxa": random.choice(_taxa),
                     "confidence": r(),
                     "bounding_box_xyxy": [r(), r(), r(), r()]
-                })
+                 })
             return fdata
 
         for i in range(len(pictures)):
@@ -2506,7 +2506,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         print_test_results()
         for f in test_log_files:
             os.remove(f)
-        os.remove("ckan.key")
         # input("press key to remove docker volumes...")
         # cls.log.info("stopping containers")
         # run_subprocess("docker compose down")

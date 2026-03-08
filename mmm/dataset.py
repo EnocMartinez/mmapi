@@ -24,7 +24,7 @@ import logging
 
 class DatasetObject(LoggerSuperclass):
     def __init__(self, mc: MetadataCollector, fileserver: FileServer, conf: dict, filename: str, service_name: str, resource: dict,
-                 tstart: pd.Timestamp | str, tend: pd.Timestamp | str, fmt: str, log: logging.Logger, delivered=False):
+                 tstart: pd.Timestamp, tend: pd.Timestamp, fmt: str, log: logging.Logger, delivered=False):
         """
         This object contains all the metadata related to a dataset (or data file) and provides methods to deliver,
         update it.
@@ -42,10 +42,33 @@ class DatasetObject(LoggerSuperclass):
         assert_type(mc, MetadataCollector)
         assert_type(fileserver, FileServer)
         assert_type(conf, dict)
+        assert_type(filename, str)
+        assert_type(service_name, str)
+        assert_type(resource, dict)
+        assert_type(tstart, pd.Timestamp)
+        assert_type(tend, pd.Timestamp)
+        assert_type(fmt, str)
+        assert(delivered, bool)
+
+        init = time.time()
         validate_schema(conf, mmm_schemas["datasets"], [])
+        self.debug(f"Validating schema took {1000*(time.time() - init):.01f} secs")
+
         self.mc = mc
         self.fileserver = fileserver
-        self.delivered = False  # will be set to True once the data object has been sent
+        self.conf = conf
+        self.filename = filename
+        self.service_name = service_name
+        self.resource = resource
+        self.tstart = tstart
+        self.tend = tend
+        self.fmt = fmt
+        self.delivered = delivered  # will be set to True once the data object has been sent
+
+        self.dataset_id = conf["#id"]
+        self.resource_id = resource["id"]
+
+        self.url = ""
 
         if delivered:
             # File should be available at destination
@@ -66,44 +89,7 @@ class DatasetObject(LoggerSuperclass):
             self.ctime = pd.Timestamp(os.path.getctime(filename))
             self.size = os.path.getsize(filename)
 
-        # Convert strings
-        if type(tstart) is str:
-            tstart = pd.Timestamp(tstart)
-        if type(tend) is str:
-            tend = pd.Timestamp(tend)
-
-        assert type(tstart) is pd.Timestamp
-        assert type(tend) is pd.Timestamp
-
-        self.info(f"Creating dataset from {tstart} to {tend}")
-
-        self.filename = filename
-        self.conf = conf
-        self.dataset_id = conf["#id"]
-        if fmt:
-            self.fmt = fmt
-        else:
-            self.fmt = resource["format"]
-
-        self.tstart = tstart
-        self.tend = tend
-        self.url = ""
-
-        tfmt = "%Y%m%d"
-        start = self.tstart_str(tfmt)
-        end = self.tend_str(tfmt)
-        resource_id = resource["id"]
-        self.service_name = service_name
-
-        # Store the configuration for all export services, we don't know yet to which service the data object
-        # will be delivered.
-
-        config = resource
-        self.exporter = DataExporter(config, self.dataset_id, self.fileserver, self.log)
-        self.erddap_configured = False
-        self.erddap_dataset_id = ""
-
-        self.resource_id = resource["id"]
+        self.exporter = DataExporter(resource, self.dataset_id, self.fileserver, self.log)
 
     def tstart_str(self, fmt="%Y-%m-%dT%H:%M:%SZ"):
         return self.tstart.strftime(fmt)
@@ -111,7 +97,7 @@ class DatasetObject(LoggerSuperclass):
     def tend_str(self, fmt="%Y-%m-%dT%H:%M:%SZ"):
         return self.tend.strftime(fmt)
 
-    def deliver_and_register(self, register=True):
+    def deliver_and_register(self):
         """
         Delivers a dataset to the export service as configured in __init__
         :param fileserver: FileServer to convert from filesystem tu public HTTP URL. If no URL is needed, leave it blank
@@ -132,10 +118,22 @@ class DatasetObject(LoggerSuperclass):
         if path_or_url.startswith("https://") or path_or_url.startswith("http://"):
             self.url = path_or_url
 
-        if register:
-            path = self.fileserver.url2path(self.url)
-            self.mc.dataset_register(self.resource_id, self.dataset_id, self.tstart_str(), self.tend_str(), self.url, path)
 
+        self.debug(f"   dataset = {self.conf['#id']}")
+        self.debug(f"   service_name = {self.service_name}")
+        self.debug(f"   resource = {self.resource['id']}")
+        self.debug(f"   format = {self.fmt}")
+        self.debug(f"   tstart = {self.tstart}")
+        self.debug(f"   tend = {self.tend}")
+
+        if self.service_name == "fileserver":
+            path = self.fileserver.url2path(self.url)
+        else:
+            path = ""  # for other services datasets are not reachable directly via URL
+
+        host = self.resource["host"]
+        self.mc.dataset_register(self.dataset_id, self.resource_id, self.service_name, self.fmt, self.tstart,
+                                 self.tend, self.url, path, host)
         return path_or_url
 
     def configure_erddap(self, datasets_xml, dataset_path):
@@ -258,7 +256,7 @@ class DataExporter(LoggerSuperclass):
         LoggerSuperclass.__init__(self, log, "Exporter", colour=GRN)
         self.period = conf["period"]
         self.host = conf["host"]
-        self.format = conf["format"]
+        self.fmt = conf["format"]
 
         self.fileserver = fileserver
 

@@ -11,7 +11,7 @@ created: 30/11/22
 import datetime
 import logging
 import socket
-from typing import Tuple
+from typing import Tuple, List
 
 import yaml
 import time
@@ -211,15 +211,20 @@ class DataCollector(LoggerSuperclass):
 
     def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str = "",
                          time_end: pd.Timestamp|str = "", fmt: str = "", overwrite=False, erddap_config=False,
-                         secrets={}, resources=[], deliver=True):
+                         secrets: dict=None, resources: dict = None, local=False) -> List[DatasetObject,]:
         """
 
-        :param dataset: dataset identifier (as stored in metadata database
-        :param service_name: name of the service where it will be exported
-        :param time_start: first timestamp of the dataset
-        :param time_end: last timestamp of the dataset
-        :param fmt: overrisde configured format (e.g. create a CSV instead of a netcdf)
-        :return:
+        :param dataset: dataset_id or dataset configuration dict
+        :param service_name: name of the service to export
+        :param time_start: (optional) time start
+        :param time_end: (optional) time end
+        :param fmt: override the default format
+        :param overwrite: If dataset already exsists, overwrite it or not (True/False)
+        :param erddap_config: If erddap_config is True, try to configure remotely the ERDDAP server using emso_metadta_harmonmizer.erddap_config
+        :param secrets: secrets dict (needed if erddap_config is True)
+        :param resources: generate just a subset of the resources, use a list of resource_id
+        :param local: Do not deliver the dataset to the host machine, keep in locally
+        :return: list of DatasetObjects
         """
         assert_type(service_name, str)
         assert_types(dataset, [dict, str])
@@ -235,7 +240,6 @@ class DataCollector(LoggerSuperclass):
             conf = dataset
         dataset_id = conf["#id"]
 
-
         self.info(f"=====> Creating dataset {GRN}{dataset_id} {RST} <=====")
 
         assert service_name in conf["export"].keys(), f"Dataset {dataset_id} doesn't have export configuration for service '{service_name}'"
@@ -249,22 +253,22 @@ class DataCollector(LoggerSuperclass):
         datasets = []
         for resource in conf["export"][service_name]["resources"]:
             time_start, time_end = self.resolve_time_coverage(conf, resource, time_start, time_end)
-            datasets += self.generate_dataset_tree(conf, service_name, resource, time_start, time_end, fmt=fmt,
-                                            overwrite=overwrite)
+            datasets += self.generate_dataset_tree(conf, service_name, resource, time_start, time_end, fmt=fmt,overwrite=overwrite)
 
-        register = False
-        if service_name == "fileserver":
-            register = True  # Only store reg
+        # Avoid None datasets
+        datasets = [d for d in datasets if d]
 
-        if deliver:
-            for dataset in datasets:
-                if dataset:
-                    # Deliver and register dataset in fileserver_datasets_registry
-                    dataset.deliver_and_register(register=register)
-        else:
+        if local:
             for dataset in datasets:
                 self.info(f"Local file stored in {dataset.filename}")
-                self.warning(f"Not registering in metadata database datasets in fileserver_dataset_registry!")
+                self.warning(f"Not registering in metadata database datasets in dataset_registry!")
+                return datasets
+
+        self.info("Delivering and registering datasets")
+        for dataset in datasets:
+            if dataset:
+                # Deliver and register dataset in fileserver_datasets_registry
+                dataset.deliver_and_register()
 
         if service_name == "erddap" and erddap_config:
             try:
@@ -279,8 +283,6 @@ class DataCollector(LoggerSuperclass):
                 big_parent_directory=secrets["erddap"]["big_parent_directory"],
                 erddap_uid=secrets["erddap"]["uid"]
             )
-        # Avoid None datasets
-        datasets = [d for d in datasets if d]
         return datasets
 
     def generate_dataset_tree(self,  dataset: dict, service_name: str, resource: dict, time_start: pd.Timestamp,
@@ -307,7 +309,7 @@ class DataCollector(LoggerSuperclass):
         return datasets
 
     def generate_dataset_file(self, conf: dict, service_name: str, resource: dict, time_start: pd.Timestamp,
-                              time_end: pd.Timestamp, fmt: str = "", overwrite=False) -> DatasetObject:
+                              time_end: pd.Timestamp, fmt: str = "", overwrite=False) -> DatasetObject|None:
         """
         Generates a dataset based on its configuration stored in Metadata DB
         :param conf: #id of the dataset
@@ -336,14 +338,14 @@ class DataCollector(LoggerSuperclass):
             assert fmt in dataset_exporter_formats, f"Format '{fmt}' not allowed"
 
         # Check if the data already exists
-        dataset_resource_id = resource["id"]
-        if not overwrite and self.mc.dataset_resource_exists(dataset_resource_id):
+        dataset_label = f"{conf["#id"]}:{resource['id']}:{service_name}:{fmt}:{time_start.strftime('%Y-%m-%d')}:{time_end.strftime('%Y-%m-%d')}"
+        if self.mc.dataset_resource_exists(conf["#id"], resource['id'], service_name, fmt, time_start, time_end):
             if overwrite:
                 # Just throw a warning and continue
-                self.warning(f"Dataset resource already exists: '{dataset_resource_id}', overwriting it!")
+                self.info(f"Overwriting existing resource: {dataset_label}")
             else:
-                self.error(f"Data resource already exists '{dataset_resource_id}', use the --overwrite flag to overwrite it")
-                return
+                self.error(f"Data resource already exists '{dataset_label}', use the --overwrite flag to overwrite it")
+                return None
 
         if fmt == "csv":
             filename, delivered = self.csv_from_sta(conf, resource, time_start, time_end)
@@ -357,7 +359,7 @@ class DataCollector(LoggerSuperclass):
             raise ValueError(f"Unknown dataSource format '{fmt}'")
 
         if not filename:
-            self.warning("No dataset created! Maybe it already exists?")
+            self.warning("No dataset created!")
             return None
 
         obj = DatasetObject(self.mc, self.fileserver, conf, filename, service_name, resource, time_start, time_end, fmt, self.log, delivered=delivered)
@@ -393,7 +395,7 @@ class DataCollector(LoggerSuperclass):
         """
         raise ValueError("Unimplemented data type detections")
 
-    def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=[], tstart=None, tend=None, first=False, last=False):
+    def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=None, tstart=None, tend=None, first=False, last=False):
         """
         This function returns generic DataFrame with the same columns for all data types. The generic dataframe has the
         following columns:
@@ -411,18 +413,23 @@ class DataCollector(LoggerSuperclass):
         :param fois:
         :return: dataframe with columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
         """
+
+        if not fois:
+            fois = []
+
         dataframes = []
         # assert all incoming data types
         assert_type(station_ids, list)
         assert_type(sensor_ids, list)
         assert_type(sensor_ids, list)
         assert data_type in mmapi_data_types, f"data type '{data_type}' not valid'"
-        assert_type(fois, list)
+        assert_types(fois, [list, type(None)])
         [assert_type(s, str) for s in station_ids]
         [assert_type(s, str) for s in sensor_ids]
         [assert_type(s, str) for s in fois]
         assert_types(tstart, [type(None), pd.Timestamp])
         assert_types(tend, [type(None), pd.Timestamp])
+
 
         assert data_type in mmapi_data_types, f"data type '{data_type}' not valid'"
 
@@ -454,7 +461,6 @@ class DataCollector(LoggerSuperclass):
 
         query += ";"
         datastream_ids = self.sta.list_from_query(query)
-        self.info(f"Found {len(datastream_ids)} datastreams")
 
         # Step 2: Query for data, all queries should return ALL possible column types, regardless if they are empty
         # timestamp, time_end, depth, value, qc_flag, parameters, variable, sensor_id, platform_id, foi
@@ -476,7 +482,7 @@ class DataCollector(LoggerSuperclass):
                 select
                     "OBSERVATIONS"."PHENOMENON_TIME_START" as timestamp,                    
                     "PARAMETERS"->'depth' as depth,
-                    "OBSERVATIONS"."{result_column}" as value, -- change this dependingo on data type!!!
+                    "OBSERVATIONS"."{result_column}" as value,
                     "OBSERVATIONS"."RESULT_QUALITY"->>'qc_flag' as qc_flag,
                     "OBSERVATIONS"."PHENOMENON_TIME_END" as time_end,
                     "PARAMETERS" as parameters,
@@ -542,165 +548,15 @@ class DataCollector(LoggerSuperclass):
                 ;"""
 
             if tstart:
-                query = query.replace("--time-start-filter", f"""    and timestamp >= '{tstart.strftime(iso_format)}'""")
+                query = query.replace("--time-start-filter", f"""and timestamp >= '{tstart.strftime(iso_format)}'""")
             if tend:
-                query = query.replace("--time-end-filter", f"""    and timestamp < '{tend.strftime(iso_format)}'""")
+                query = query.replace("--time-end-filter", f"""and timestamp < '{tend.strftime(iso_format)}'""")
 
             if first:
                 query += query.replace(";", f""" order by {table_name}.timestamp limit 1;""")
             elif last:
                 query += query.replace(";", f""" order by {table_name}.timestamp desc limit 1;""")
         df = self.sta.dataframe_from_query(query)
-
-        # sort by timestamp
-        df = df.sort_values('timestamp').reset_index(drop=True)
-        return df
-
-    def data_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=[],
-                                   tstart=None, tend=None, first=False, last=False):
-        """
-        This function returns generic DataFrame with the same columns for all data types. The generic dataframe has the
-        following columns:
-                       timestamp depth     value  qc_flag time_end parameters variable sensor_id platform_id   foi
-0      2023-01-01 00:00:00+00:00  None  1.000000        1     None       None     CNDC     SBE37       OBSEA  None
-1      2023-01-01 00:01:40+00:00  None  1.000000        1     None       None     CNDC     SBE37       OBSEA  None
-2      2023-01-01 00:03:20+00:00  None  1.000000        1     None       None     CNDC     SBE37       OBSEA  None
-
-        This dataset needs to be filtered and pivoted inside the data-specific method.
-
-        :param station_ids:
-        :param sensor_ids:
-        :param data_type:
-        :param average:
-        :param fois:
-        :return: dataframe with columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
-        """
-        dataframes = []
-        # assert all incoming data types
-        assert_type(station_ids, list)
-        assert_type(sensor_ids, list)
-        assert_type(sensor_ids, list)
-        assert data_type in mmapi_data_types, f"data type '{data_type}' not valid'"
-        assert_type(fois, list)
-        [assert_type(s, str) for s in station_ids]
-        [assert_type(s, str) for s in sensor_ids]
-        [assert_type(s, str) for s in fois]
-        assert_types(tstart, [type(None), pd.Timestamp])
-        assert_types(tend, [type(None), pd.Timestamp])
-
-        assert data_type in mmapi_data_types, f"data type '{data_type}' not valid'"
-
-        # Check incompatible arguments
-        if average and data_type in ["files", "json", "detections"]:
-            self.error(f"Average on data type {data_type} unimplemented", exception=ValueError)
-
-        self.info(
-            f"Getting data for sensors={sensor_ids}, stations={station_ids}, data_type={data_type}, average={average}, fois={fois}")
-
-        # Step 1: Get the list of datastreams to query
-        query = f"""
-            select
-                "ID"                
-            from "DATASTREAMS"
-            where
-                "SENSOR_ID" in (select "ID" from "SENSORS" WHERE "NAME" in {sql_list(sensor_ids)})
-                and "THING_ID" in (select "ID" from "THINGS" WHERE "NAME" in {sql_list(station_ids)})
-                and "PROPERTIES"->>'dataType' = '{data_type}'
-        """
-        # Averaged data needs to be filtered by averagePeriod
-        if average:
-            query += f""" and "PROPERTIES"->>'averagePeriod' = '{average}'"""
-        # In timeseries/profiles/detections we need to be sure to select only fullData
-        elif data_type in ["timeseries", "profiles", "detections"]:
-            query += f"""     and ("PROPERTIES"->>'fullData')::boolean = True """
-
-        query += ";"
-        datastream_ids = self.sta.list_from_query(query)
-        self.info(f"Found {len(datastream_ids)} datastreams")
-
-        # Step 2: Query for data, all queries should return ALL possible column types, regardless if they are empty
-        # timestamp, time_end, depth, value, qc_flag, parameters, variable, sensor_id, platform_id, foi
-        iso_format = f"%Y-%m-%dT%H:%M:%SZ"
-
-        # If averaged or files/json we need to query OBSERVATIONS table
-        if data_type in ["files", "json"] or average:
-            self.debug("querying the OBSERVATIONS table")
-
-            # First, select the result column depending on data type
-            if data_type in ["timeseries", "profiles", "detections"]:
-                result_column = "RESULT_NUMBER"
-            elif data_type == "files":
-                result_column = "RESULT_STRING"
-            else:  # json data type
-                result_column = "RESULT_JSON"
-
-            query = f"""
-                select
-                    "OBSERVATIONS"."PHENOMENON_TIME_START" as timestamp,                    
-                    "PARAMETERS"->'depth' as depth,
-                    "OBSERVATIONS"."{result_column}" as value, -- change this dependingo on data type!!!
-                    "OBSERVATIONS"."RESULT_QUALITY"->>'qc_flag' as qc_flag,
-                    "OBSERVATIONS"."PHENOMENON_TIME_END" as time_end
-
-                from "OBSERVATIONS"
-                where
-                    "OBSERVATIONS"."DATASTREAM_ID" in {sql_list(datastream_ids, string=False)}
-                    --time-start-filter
-                    --time-end-filter
-                    --foi-filter
-                ;"""
-
-            if tstart:
-                query = query.replace("--time-start-filter",
-                                      f"""    and "OBSERVATIONS"."PHENOMENON_TIME_START" >= '{tstart.strftime(iso_format)}'""")
-            if tend:
-                query = query.replace("--time-end-filter",
-                                      f"""    and "OBSERVATIONS"."PHENOMENON_TIME_END" < '{tend.strftime(iso_format)}'""")
-            if fois:
-                foi_ids = self.sta.list_from_query(
-                    f"""select "ID" from "FEATURES" where "NAME" in {sql_list(fois)};""")
-                query = query.replace("--foi-filter",
-                                      f"""    and "OBSERVATIONS"."FEATURE_ID" in {sql_list(foi_ids, string=False)}""")
-            if first:
-                query += query.replace(";", """ order by "OBSERVATIONS"."PHENOMENON_TIME_START" limit 1;""")
-            elif last:
-                query += query.replace(";", """ order by "OBSERVATIONS"."PHENOMENON_TIME_START" desc limit 1;""")
-
-            df = self.sta.dataframe_from_query(query)
-
-        else:  # Now, deal with timeseries, profiles and detections in the same query
-            table_name = data_type  # Data type is the same as table name
-            # First, let's decide the columns to query
-            if data_type == "timeseries":
-                columns = f"timeseries.timestamp, null as depth, timeseries.value, timeseries.qc_flag,"""
-            elif data_type == "profiles":
-                columns = f"profiles.timestamp,  profiles.depth, profiles.value, profiles.qc_flag,"""
-            else:  # detections
-                columns = f"detections.timestamp, null as depth, detections.value, null as profiles.qc_flag,"""
-
-            query = f"""
-                select
-                    {columns}
-                from {table_name}, "SENSORS", "THINGS", "OBS_PROPERTIES", "DATASTREAMS"
-                where
-                    datastream_id in {sql_list(datastream_ids, string=False)}
-                    --time-start-filter
-                    --time-end-filter                    
-                    and {table_name}.datastream_id = "DATASTREAMS"."ID"
-                ;"""
-
-            if tstart:
-                query = query.replace("--time-start-filter",
-                                      f"""    and timestamp >= '{tstart.strftime(iso_format)}'""")
-            if tend:
-                query = query.replace("--time-end-filter", f"""    and timestamp < '{tend.strftime(iso_format)}'""")
-
-            if first:
-                query += query.replace(";", f""" order by {table_name}.timestamp limit 1;""")
-            elif last:
-                query += query.replace(";", f""" order by {table_name}.timestamp desc limit 1;""")
-
-            df = self.sta.dataframe_from_query(query)
 
         # sort by timestamp
         df = df.sort_values('timestamp').reset_index(drop=True)
@@ -871,6 +727,9 @@ class DataCollector(LoggerSuperclass):
         """
         filename = self.dataset_filename(conf, "csv", time_start, time_end)
         df = self.dataframe_from_sta(conf, conf["@stations"], conf["@sensors"], resource, time_start, time_end)
+        if df.index.name == "timestamp":
+            df.index.name = "time"
+
         df.to_csv(filename)
         self.info(f"Writing CSV file '{filename}'")
         return filename, False
@@ -894,7 +753,6 @@ class DataCollector(LoggerSuperclass):
             fois = [conf["constraints"]["fieldOfView"]["@programmes"]]
         except KeyError:
             fois = []
-
         # Getting dataframe
         df = self.dataframe_from_sta_generic(conf["@stations"], conf["@sensors"], "files", tstart=time_start,
                                              tend=time_end, fois=fois)

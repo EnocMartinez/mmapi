@@ -8,6 +8,8 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 23/3/21
 """
+import traceback
+
 import requests
 import json
 from mmm.common import normalize_string, LoggerSuperclass, PRL, assert_type, download_file, run_over_ssh, check_url, \
@@ -532,7 +534,6 @@ class CkanClient(LoggerSuperclass):
 
         # Now create or update all the resources:
         for resource, link, tstart, tend in ckan_resources:
-
             self.info(f"===> Processing resource " + CYN + dataset_id + RST +  ":" + WHT + resource['id'] + self.log_colour +  " <=====")
             ckan_resource_id = dataset_id + "_" + resource["id"]
             ckan_resource_id = ckan_resource_id.lower()
@@ -567,7 +568,7 @@ class CkanClient(LoggerSuperclass):
         assert_type(resource_url, str)
         assert_type(path, str)
 
-        self.info(f"Registering dataset view for {dataset_id} {resource_id}")
+        self.info(f"Creating dataset view for {dataset_id} {resource_id} ...")
         filename = "./" + resource_url.split("/")[-1]
         extension = filename.lower().split(".")[-1]
         resource_view_file = filename.lower().replace(extension, "jpeg")
@@ -588,8 +589,8 @@ class CkanClient(LoggerSuperclass):
             try:
                 dataset_plot = auto_plotter(filename, resource_id, dataset)
             except Exception as e:
-                self.error(str(e))
-                self.error(f"Can't create resource view for {dataset_id}:{resource_id}")
+                self.error(traceback.format_exc())
+                self.error(f"Can't create resource view for {dataset_id}:{resource_id}", exception=ValueError)
                 return
             rgb_image = Image.open(dataset_plot).convert("RGB")
 

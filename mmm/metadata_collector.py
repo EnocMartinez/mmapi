@@ -131,7 +131,7 @@ class MetadataCollector(LoggerSuperclass):
         LoggerSuperclass.__init__(self, log, "MC", PRL)
         self.info("Initializing MetadataCollector")
 
-        self.dataset_registry_table = "fileserver_dataset_registry"
+        self.dataset_registry_table = "dataset_registry"
 
         self.default_author = default_author
         self.organization = organization
@@ -214,19 +214,23 @@ class MetadataCollector(LoggerSuperclass):
             query = f"""
             CREATE TABLE IF NOT EXISTS {self.dataset_registry_table}
                 (
-                    resource_id TEXT NOT NULL,
                     dataset_id TEXT NOT NULL,
+                    resource_id TEXT NOT NULL,
+                    service TEXT NOT NULL,
+                    format TEXT NOT NULL,
                     data_from timestamp with time zone,
-                    data_to timestamp with time zone,
+                    data_to timestamp with time zone,                    
                     creation_date timestamp with time zone NOT NULL,
                     modification_date timestamp with time zone NOT NULL,
-                    url TEXT NOT NULL,
-                    path TEXT not NULL    
+                    url TEXT,
+                    path TEXT not NULL,    
+                    host TEXT not NULL
                 )
             """
             self.db.exec_query(query, fetch=False)
             self.db.exec_query(
-                f"ALTER TABLE {self.dataset_registry_table} ADD UNIQUE (resource_id, dataset_id, data_from, data_to);",
+                f"""ALTER TABLE {self.dataset_registry_table} 
+                           ADD UNIQUE (dataset_id, resource_id, service, format, data_from, data_to);""",
                 fetch=False
             )
 
@@ -889,6 +893,8 @@ class MetadataCollector(LoggerSuperclass):
             for doc in docs:
                 self.delete_document(col, doc["#id"], history=True)
 
+        self.db.exec_query(f"delete from {self.dataset_registry_table};", fetch=False)
+
     def get_last_sensor_deployment(self, sensor_id) -> Tuple[str, pd.Timestamp, bool]:
         """
         Returns the name of the last station where this sensor was deployed
@@ -1159,39 +1165,37 @@ class MetadataCollector(LoggerSuperclass):
         history = sorted(history, key=lambda x: x['time'])
         return history
 
-    def dataset_register(self, resource_id, dataset_id, tstart: str, tend: str, url, path):
+    def dataset_register(self, dataset_id: str, resource_id: str, service: str, fmt: str, data_from: pd.Timestamp,
+                         data_to: pd.Timestamp, url: str, path: str, host: str):
         """
         Register a dataset into the fileserver_dataset_registry. If no entry exists insert it, otherwise update it
-        :param resource_id:
-        :param dataset_id:
-        :param tstart:
-        :param tend:
-        :param url:
-        :param path:
-        :return:
         """
-        assert_type(resource_id, str)
         assert_type(dataset_id, str)
-        assert_type(tstart, str)
-        assert_type(tend, str)
-        assert_type(path, str)
+        assert_type(resource_id, str)
+        assert_type(service, str)
+        assert_type(fmt, str)
+        assert_type(data_from, pd.Timestamp)
+        assert_type(data_to, pd.Timestamp)
         assert_type(url, str)
+        assert_type(path, str)
+        assert_type(host, str)
+
 
         now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-        query = f"""
-            SELECT EXISTS(
-                SELECT 1 FROM {self.dataset_registry_table} 
-                WHERE
-                dataset_id='{dataset_id}' and resource_id='{resource_id}' and data_from='{tstart}' and data_to='{tend}'
-            );"""
-        table_entry_exists = self.db.value_from_query(query)
+        self.debug(f"Registering dataset {dataset_id}:{resource_id}:{service}:{fmt}:{data_from}:{data_to}")
+
+        table_entry_exists = self.dataset_resource_exists(dataset_id, resource_id, service, fmt, data_from, data_to)
+
         # We did not update anything in the table! This means that we need to insert it
         if not table_entry_exists:  # Create new registry
             self.info(f"CREATE dataset registry for dataset_id='{dataset_id}' and resource_id='{resource_id}'")
+            creation_date = now
+            modification_date = now
             query = f"""
                 INSERT INTO {self.dataset_registry_table} 
-                (resource_id, dataset_id, data_from, data_to, creation_date, modification_date, url, path) 
-                VALUES ('{resource_id}', '{dataset_id}', '{tstart}', '{tend}', '{now}', '{now}', '{url}', '{path}');
+                (dataset_id, resource_id, service, format, data_from, data_to, creation_date, modification_date, url, path, host) 
+                VALUES ('{dataset_id}','{resource_id}','{service}','{fmt}','{data_from}','{data_to}','{creation_date}',
+                        '{modification_date}','{url}','{path}','{host}');
                 """
             self.db.exec_query(query, fetch=False)
 
@@ -1199,24 +1203,26 @@ class MetadataCollector(LoggerSuperclass):
             self.info(f"UPDATE dataset registry for dataset_id='{dataset_id}' and resource_id='{resource_id}'")
             query = f"""        
                 UPDATE {self.dataset_registry_table}
-                SET modification_date = '{now}', path = '{path}',  url = '{url}' 
+                SET modification_date = '{now}', path = '{path}',  url = '{url}', host = '{host}'
                 WHERE
-                 dataset_id='{dataset_id}' and resource_id='{resource_id}' and data_from='{tstart}' and data_to='{tend}'
+                 dataset_id='{dataset_id}' and resource_id='{resource_id}' and data_from='{data_from}' and data_to='{data_to}'
             ;"""
             self.db.exec_query(query, fetch=False)
 
-    def dataset_resource_exists(self, resource_id) -> bool:
-        query = f"select url from fileserver_dataset_registry where resource_id = '{resource_id}';"
-        results = self.db.list_from_query(query)
-        if len(results) > 0:
-            url = results[0]
-            if not check_url(url):
-                self.error(f"resource {resource_id} registered, but URL not reachable! Deleting from registry...")
-                self.db.exec_query(f"delete from fileserver_dataset_registry where resource_id = '{resource_id}';",
-                                fetch=False)
-                return False
-            return True
-        return False
+    def dataset_resource_exists(self,dataset_id: str, resource_id: str, service: str, fmt: str, data_from: pd.Timestamp,
+                         data_to: pd.Timestamp,) -> bool:
+        query = f"""
+            SELECT EXISTS(
+                SELECT 1 FROM {self.dataset_registry_table} 
+                WHERE
+                    dataset_id='{dataset_id}' 
+                    and resource_id='{resource_id}' 
+                    and service='{service}'
+                    and format='{fmt}'
+                    and data_from='{data_from}' 
+                    and data_to='{data_to}'                    
+            );"""
+        return self.db.value_from_query(query)
 
     def get_taxa_aphia_dict(self):
         """
