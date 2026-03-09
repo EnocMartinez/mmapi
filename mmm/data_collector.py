@@ -419,15 +419,19 @@ class DataCollector(LoggerSuperclass):
     def add_station_coordinates(self,  df):
         # TODO: Now we keep only the last position. Go through the entire lifetime to get the proper values
         stations = df["platform_id"].unique()
-        df["latitude"] = -1
-        df["longitude"] = -1
-        df["depth"] = -1
+        for coord in ["latitude", "longitude", "depth"]:
+            if coord not in df.columns:
+                df[coord] = np.nan
+
         for station in stations:
             latitude, longitude, depth = self.mc.get_station_coordinates(station)
             df.loc[df["platform_id"] == station, "latitude"] = latitude
             df.loc[df["platform_id"] == station, "longitude"] = longitude
-            df.loc[df["platform_id"] == station, "depth"] = depth
 
+            # Add depth only if it didn't exist
+            if len(df["depth"].unique()) == 1 and df["depth"].unique()[0] in [None, np.nan]:
+                df.loc[df["platform_id"] == station, "depth"] = depth
+        
         return df
 
     def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=None, tstart=None, tend=None, first=False, last=False):
@@ -636,6 +640,8 @@ class DataCollector(LoggerSuperclass):
         df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi        df = df[["timestamp", "depth", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
         df = df[["timestamp", "depth", "latitude", "longitude", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
+        print(df["depth"].unique())
+        print(df)
         df = pivot_dataframe(df, pivot_cols=["value", "qc_flag"])
         return df.set_index("timestamp")
 
