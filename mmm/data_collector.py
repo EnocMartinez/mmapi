@@ -278,6 +278,14 @@ class DataCollector(LoggerSuperclass):
                 self.error("Could not access datasets.xml path in secrets!", exception=ValueError)
 
             self.info("Trying to autoconfigure ERDDAP dataset (using last dataset)")
+
+            dataset = None
+            for d in datasets:
+                if d:
+                    dataset = d
+            if not datasets:
+                self.error("All dataset are empty! Cannot configure ERDDAP", exception=ValueError)
+
             dataset.configure_erddap_remotely(
                 dataset_xml_path,
                 big_parent_directory=secrets["erddap"]["big_parent_directory"],
@@ -373,19 +381,32 @@ class DataCollector(LoggerSuperclass):
         [assert_type(s, str) for s in sensor_ids]
         data_type = resource["dataType"]
         if data_type == "timeseries":
-            return self.dataframe_from_sta_timeseries(conf, resource, station_ids, sensor_ids, time_start, time_end)
+            df = self.dataframe_from_sta_timeseries(conf, resource, station_ids, sensor_ids, time_start, time_end)
         elif data_type == "detections":
             df = self.dataframe_from_sta_detections(conf, resource, station_ids, sensor_ids, time_start, time_end)
-            return df
         elif data_type == "profiles":
-            return self.dataframe_from_sta_profiles(conf, resource, station_ids, sensor_ids, time_start, time_end)
+            df = self.dataframe_from_sta_profiles(conf, resource, station_ids, sensor_ids, time_start, time_end)
         elif data_type == "files":
-            return self.dataframe_from_sta_files(conf,resource,  station_ids, sensor_ids, time_start, time_end)
+            df = self.dataframe_from_sta_files(conf,resource,  station_ids, sensor_ids, time_start, time_end)
         elif data_type == "json":
-            return self.dataframe_from_sta_json(conf, resource,  station_ids, sensor_ids, time_start, time_end)
+            df = self.dataframe_from_sta_json(conf, resource,  station_ids, sensor_ids, time_start, time_end)
         else:
             df = None
             self.error(f"Unimplemented data type {conf['dataType']}", exception=ValueError)
+
+        if "@variables" in conf.keys():
+            self.info(f"Filtering variables, keeping: {conf['@variables']}")
+            keep_vars = ["time", "depth", "latitude", "longitude", "sensor_id", "platform_id", "foi"] + conf["@variables"]
+            for col in df.columns:
+                if col.endswith("_QC"):
+                    continue
+                if col not in keep_vars:
+                    self.debug(f"Deleting {col}")
+                    del df[col]
+                    if col + "_QC" in df.columns:
+                        del df[col + "_QC"]
+
+
         return df
 
     def dataframe_from_sta_detections(self, conf: dict, resource: dict,station_ids: list, sensor_ids, time_start: pd.Timestamp,
@@ -394,6 +415,20 @@ class DataCollector(LoggerSuperclass):
         Return all the detections from a sensor
         """
         raise ValueError("Unimplemented data type detections")
+
+    def add_station_coordinates(self,  df):
+        # TODO: Now we keep only the last position. Go through the entire lifetime to get the proper values
+        stations = df["platform_id"].unique()
+        df["latitude"] = -1
+        df["longitude"] = -1
+        df["depth"] = -1
+        for station in stations:
+            latitude, longitude, depth = self.mc.get_station_coordinates(station)
+            df.loc[df["platform_id"] == station, "latitude"] = latitude
+            df.loc[df["platform_id"] == station, "longitude"] = longitude
+            df.loc[df["platform_id"] == station, "depth"] = depth
+
+        return df
 
     def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=None, tstart=None, tend=None, first=False, last=False):
         """
@@ -429,7 +464,6 @@ class DataCollector(LoggerSuperclass):
         [assert_type(s, str) for s in fois]
         assert_types(tstart, [type(None), pd.Timestamp])
         assert_types(tend, [type(None), pd.Timestamp])
-
 
         assert data_type in mmapi_data_types, f"data type '{data_type}' not valid'"
 
@@ -560,6 +594,7 @@ class DataCollector(LoggerSuperclass):
 
         # sort by timestamp
         df = df.sort_values('timestamp').reset_index(drop=True)
+        self.add_station_coordinates(df)
         return df
 
     def dataframe_from_sta_timeseries(self, conf: dict, resource: dict, station_ids: list, sensor_ids: list, time_start: pd.Timestamp = None,
@@ -579,7 +614,7 @@ class DataCollector(LoggerSuperclass):
 
         df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
-        df = df[["timestamp", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
+        df = df[["timestamp", "depth", "latitude", "longitude", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
         df = pivot_dataframe(df, pivot_cols=["value", "qc_flag"])
         return df.set_index("timestamp")
 
@@ -600,7 +635,7 @@ class DataCollector(LoggerSuperclass):
 
         df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi        df = df[["timestamp", "depth", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
-        df = df[["timestamp", "depth", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
+        df = df[["timestamp", "depth", "latitude", "longitude", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
         df = pivot_dataframe(df, pivot_cols=["value", "qc_flag"])
         return df.set_index("timestamp")
 
@@ -624,13 +659,7 @@ class DataCollector(LoggerSuperclass):
 
         df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, tstart=time_start, tend=time_end)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
-        df = df[["timestamp", "depth", "sensor_id", "platform_id", "value", "variable", "foi"]]
-
-        # TODO: Now we keep only the last position. Go through the entire lifetime to get the proper values
-        stations = df["platform_id"].unique()
-        for station in stations:
-            latitude, longitude, depth = self.mc.get_station_coordinates(station)
-            df.loc[df["platform_id"] == station, "depth"] = depth
+        df = df[["timestamp", "depth", "latitude", "longitude", "sensor_id", "platform_id", "value", "variable", "foi"]]
 
         df = pivot_dataframe(df, pivot_cols=["value"])
 
@@ -638,7 +667,6 @@ class DataCollector(LoggerSuperclass):
             df = df.rename(columns={"foi": "fieldOfView"})
         else:
             del df["foi"]
-
         return df.set_index("timestamp")
 
 
@@ -660,10 +688,10 @@ class DataCollector(LoggerSuperclass):
 
         df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
-        df = df[["timestamp", "depth", "value", "parameters", "variable", "sensor_id", "platform_id", "foi"]]
+        df = df[["timestamp", "depth", "latitude", "longitude", "value", "parameters", "variable", "sensor_id", "platform_id", "foi"]]
         return df.set_index("timestamp")
 
-    def netcdf_from_sta(self, conf: dict, resource: dict, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
+    def netcdf_from_sta(self, conf: dict, resource: dict, time_start: pd.Timestamp, time_end: pd.Timestamp):
         """
         Creates a NetCDF file according to the configuration
         :param conf:
@@ -682,13 +710,12 @@ class DataCollector(LoggerSuperclass):
         metadata = self.metadata_harmonizer_conf(conf)
         df = self.dataframe_from_sta(conf, conf["@stations"], conf["@sensors"], resource, time_start=time_start, time_end=time_end)
         df = df_netcdf_normalization(df)  # Ensure we have correct strings
-
         if df.empty:
             self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
             return "", False
 
         self.info("Generating filename...")
-        filename = self.dataset_filename(conf, "netcdf", df.index[0], df.index[-1])
+        filename = self.dataset_filename(conf, "netcdf", time_start, time_end)
         self.info("Calling NetCDF wrapper...")
         filename = self.call_dataset_generator(conf, [df], metadata, output=filename)
         self.debug(f"\n{df}")
@@ -878,18 +905,10 @@ class DataCollector(LoggerSuperclass):
         return filename, delivered
 
 
-    def metadata_harmonizer_conf(self, dataset, tstart: pd.Timestamp = None, tend: pd.Timestamp = None,
+    def metadata_harmonizer_conf(self, dataset: dict, tstart: pd.Timestamp = None, tend: pd.Timestamp = None,
                                  default_data_mode="delayed") -> dict:
-        """
+        """Generates the EMSO Metadata Harmonizer metadata document based in metadata DB
 
-        This method returns the configuration required by the Metadata Harmonizer tool from the Metadata DB
-        :param dataset: sensor dict from Metadata DB database
-        :param sensor: sensor dict from Metadata DB database
-        :param station: station dict from Metadata DB database
-        :param variable_ids: list of variables to be included in the dataset
-        :param default_data_mode: Default data mode
-        :param os_data_type: OceanSITES data type, probably by default time-series data
-        :return:
         """
         if tstart:
             assert_type(tstart, pd.Timestamp)
@@ -897,17 +916,18 @@ class DataCollector(LoggerSuperclass):
             assert_type(tend, pd.Timestamp)
 
         variable_ids = []
-
+        sensors = [self.mc.get_document("sensors", sensor_id) for sensor_id in dataset["@sensors"]]
         try:
             # Use only variable subset
             variable_ids  = dataset["@variables"]
         except KeyError:
             # Use all sensor variables
-            sensors = [self.mc.get_document("sensors", sensor_id) for sensor_id in dataset["@sensors"]]
             for sensor in sensors:
+                self.debug(f"processing {sensor['#id']}")
                 for variable in sensor["variables"]:
                     if variable["@variables"] not in variable_ids:
                         variable_ids.append(variable["@variables"])
+                        self.debug(f"    variable {variable['@variables']}")
 
         # Now make sure that variables have the same units across sensors
         variable_units = {var_id: [] for var_id in variable_ids}
@@ -919,6 +939,8 @@ class DataCollector(LoggerSuperclass):
 
         for var, units in variable_units.items():
             assert len(np.unique(units)) == 1, f"Variables do not have consistent units! variable={var} units={units}"
+
+        self.debug(f"Using variables: {variable_ids}")
 
         # Using first station to get owner
         station = self.mc.get_document("stations", dataset["@stations"][0])
@@ -1015,15 +1037,15 @@ class DataCollector(LoggerSuperclass):
         # Create dictionary where var_id is the key and the value is the units doc
         units = {}
         for var_id in variable_ids:
-            found = False
-            for var in sensor["variables"]:
-                if var["@variables"] == var_id:
-                    units[var_id] = self.mc.get_document("units", var["@units"])
-                    found = True
-            if not found:
-                self.warning(f"variable {var_id} not found in sensor {sensor['#id']}!")
+            for sensor_id in dataset["@sensors"]:
+                sensor = self.mc.get_document("sensors", sensor_id)
+                for var in sensor["variables"]:
+                    if var["@variables"] == var_id:
+                        units[var_id] = self.mc.get_document("units", var["@units"])
+
 
         for variable_id, units in units.items():
+            self.debug(f"   getting {variable_id} with units {units['symbol']}")
             variable = self.mc.get_document("variables", variable_id)
             varname = variable_id.replace("-", "_").replace(" ", "_")
 
