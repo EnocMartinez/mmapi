@@ -52,7 +52,7 @@ class DatasetObject(LoggerSuperclass):
 
         init = time.time()
         validate_schema(conf, mmm_schemas["datasets"], [])
-        self.debug(f"Validating schema took {1000*(time.time() - init):.01f} secs")
+        self.debug(f"Validating schema took {1000*(time.time() - init):.01f} ms")
 
         self.mc = mc
         self.fileserver = fileserver

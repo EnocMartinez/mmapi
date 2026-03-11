@@ -82,7 +82,7 @@ def default_index():
     return Response(json.dumps(d), status=200, mimetype="application/json")
 
 
-@app.route('/mmapi/v1.0/<path:collection>', methods=['GET'])
+@app.route('/mmapi/v1.0/<string:collection>', methods=['GET'])
 def get_collection(collection: str):
     try:
         opts = request.args.to_dict()
@@ -95,7 +95,7 @@ def get_collection(collection: str):
     return Response(json.dumps(documents), status=200, mimetype="application/json")
 
 
-@app.route('/mmapi/v1.0/<path:collection>/ids', methods=['GET'])
+@app.route('/mmapi/v1.0/<string:collection>/ids', methods=['GET'])
 def get_collection_ids(collection: str):
     try:
         opts = request.args.to_dict()
@@ -108,7 +108,7 @@ def get_collection_ids(collection: str):
     return Response(json.dumps(documents), status=200, mimetype="application/json")
 
 
-@app.route('/mmapi/v1.0/<path:collection>', methods=['POST', 'PATCH'])
+@app.route('/mmapi/v1.0/<string:collection>', methods=['POST'])
 def post_to_collection(collection: str):
     document = json.loads(request.data)
     app.log.debug(f"Checking if collection {collection} exists...")
@@ -131,7 +131,7 @@ def post_to_collection(collection: str):
 
     return Response(json.dumps(inserted_document), status=200, mimetype="application/json")
 
-@app.route('/mmapi/v1.0/validate/<path:collection>', methods=['POST', 'PATCH'])
+@app.route('/mmapi/v1.0/validate/<string:collection>', methods=['POST'])
 def post_to_validate(collection: str):
     document = json.loads(request.data)
     app.log.debug(f"Checking if collection {collection} exists...")
@@ -149,13 +149,19 @@ def post_to_validate(collection: str):
     return Response({"success": True}, status=200, mimetype="application/json")
 
 
-@app.route('/mmapi/v1.0/<path:collection>/<path:document_id>', methods=['PUT'])
+@app.route('/mmapi/v1.0/<string:collection>/<string:document_id>', methods=['PATCH'])
 def put_to_collection(collection: str, document_id: str):
+    """
+    Modify existing document
+    :param collection:
+    :param document_id:
+    :return:
+    """
     document = json.loads(request.data)
     app.log.debug(f"Checking if collection {collection} exists...")
 
     if collection not in app.mc.collection_names:
-        return api_error(f"Collection not '{collection}', valid collection names {mc.collection_names}")
+        return api_error(f"Collection not valid '{collection}', valid collection names {mc.collection_names}")
 
     if "#id" not in document.keys():
         return api_error(f"Field #id not found in document")
@@ -167,7 +173,6 @@ def put_to_collection(collection: str, document_id: str):
     app.log.info(f"Adding document {document_id} to collection '{collection}'")
     try:
         inserted_document = app.mc.replace_document(collection, document_id, document)
-
     except AssertionError:
         return api_error(f"No changes detected")
     except Exception as e:
@@ -176,7 +181,7 @@ def put_to_collection(collection: str, document_id: str):
     return Response(json.dumps(inserted_document), status=200, mimetype="application/json")
 
 
-@app.route('/mmapi/v1.0/<path:collection>/<path:identifier>', methods=['GET'])
+@app.route('/mmapi/v1.0/<string:collection>/<string:identifier>', methods=['GET'])
 def get_by_id(collection: str, identifier: str):
     if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
@@ -221,7 +226,7 @@ def get_operation_role_types():
     return Response(json.dumps(schema), status=200, mimetype="application/json")
 
 
-@app.route('/mmapi/v1.0/schemas/<path:collection>', methods=['GET'])
+@app.route('/mmapi/v1.0/schemas/<string:collection>', methods=['GET'])
 def get_schema(collection: str):
     if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
@@ -231,7 +236,7 @@ def get_schema(collection: str):
     schema = mmm_schemas[collection]
     return Response(json.dumps(schema), status=200, mimetype="application/json")
 
-@app.route('/mmapi/v1.0/<path:collection>/<path:identifier>/history', methods=['GET'])
+@app.route('/mmapi/v1.0/<string:collection>/<string:identifier>/history', methods=['GET'])
 def get_document_history(collection: str, identifier: str):
     if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
@@ -246,7 +251,7 @@ def get_document_history(collection: str, identifier: str):
     return Response(json.dumps(documents), status=200, mimetype="application/json")
 
 
-@app.route('/mmapi/v1.0/<path:collection>/<path:identifier>/history/<path:version>', methods=['GET'])
+@app.route('/mmapi/v1.0/<string:collection>/<string:identifier>/history/<string:version>', methods=['GET'])
 def get_history_by_id(collection: str, identifier: str, version: int):
     if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"

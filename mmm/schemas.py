@@ -506,6 +506,7 @@ ckan_exporter_conf = {
 
 # Dataset services supported by MMAPI
 valid_dataset_services = ["fileserver", "erddap", "ckan"]
+valid_dataset_levels = ["L0", "L1", "L2", "L3"]
 
 __datasets = {
     "$id": "mmm:datasets",
@@ -513,6 +514,10 @@ __datasets = {
     "properties": {
         "title": {"type": "string"},
         "summary": {"type": "string"},
+        "processingLevel": {"type": "string", "enum": valid_dataset_levels},
+        "keywords": {"type": "object", "properties": {
+            # keywork_name : keyword_uri
+        }},
         "@stations": {
             "type": "array",
             "minItems": 1,
@@ -551,10 +556,11 @@ __datasets = {
         "dataSourceOptions": {
             "type": "object",
             "properties": {
-                "fullData": {"type": "boolean"},
-                "averagePeriod": {"type": "string"},
-                "mergeSensors": {"type": "boolean"},
-                "keepFieldOfView": {"type": "boolean"} # Keep the FOI as field of view in the CSV/NetCDF dataset
+                # "fullData": {"type": "boolean"},
+                # "averagePeriod": {"type": "string"},
+                # "mergeSensors": {"type": "boolean"},
+                "keepFieldOfView": {"type": "boolean"}, # Keep the FOI as field of view in the CSV/NetCDF dataset
+                "jpegCompression": {"type": "boolean"}  # If images are in PNG format, convert them to jpeg to reduce size
             }
         },
         "dataMode": {"type": "string", "enum": ["real-time", "delayed", "mixed", "provisional"]},
@@ -626,7 +632,8 @@ __operations = {
     "$id": "mmm:operations",
     "type": "object",
     "properties": {
-        "description": {"type": "string"},
+        "name": {"type": "string"},  # short description, e.g. "OBSEA deploy SBE37 and recover AWAC"
+        "description": {"type": "string"},  # full description of the operation "Deploying sensors XX, YY, bad weather condition..."
         "timeRange": {"type": "string"},
         "status": {
             "type": "string",
@@ -656,7 +663,7 @@ __operations = {
         },
         "comment": {"type": "string"}
     },
-    "required": ["description", "timeRange", "type", "participants", "@activities", "status"],
+    "required": ["name", "description", "timeRange", "type", "participants", "@activities", "status"],
 }
 
 __variable_types = [

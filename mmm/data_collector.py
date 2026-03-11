@@ -431,7 +431,7 @@ class DataCollector(LoggerSuperclass):
             # Add depth only if it didn't exist
             if len(df["depth"].unique()) == 1 and df["depth"].unique()[0] in [None, np.nan]:
                 df.loc[df["platform_id"] == station, "depth"] = depth
-        
+
         return df
 
     def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=None, tstart=None, tend=None, first=False, last=False):
@@ -786,6 +786,12 @@ class DataCollector(LoggerSuperclass):
             fois = [conf["constraints"]["fieldOfView"]["@programmes"]]
         except KeyError:
             fois = []
+
+        # Sometimes, PNG files need to be compressed to JPEG to reduce dataset size
+        jpeg_compression = False
+        if "dataSourceOptions" in conf.keys() and "jpegCompression" in conf["dataSourceOptions"].keys():
+            jpeg_compression = conf["dataSourceOptions"]["jpegCompression"]
+
         # Getting dataframe
         df = self.dataframe_from_sta_generic(conf["@stations"], conf["@sensors"], "files", tstart=time_start,
                                              tend=time_end, fois=fois)
@@ -863,7 +869,13 @@ class DataCollector(LoggerSuperclass):
         for _, row in df.iterrows():
             source = row["src_files"]
             dest = row["files"]
-            cmd += f"cp {source} {dest}\n"
+            if jpeg_compression and source.endswith(".png"):
+                # do not copy, instead convert to JPEG
+                cmd += f"convert -quality 95 {source} {dest.replace('.png', '.jpg')}\n"
+            else:
+                # directly copy
+                cmd += f"cp {source} {dest}\n"
+
         cmd += f"zip -9 -r {remote_filename} index.csv {' '.join(sensors)}\n"
         for sensor in sensors:
             cmd += f"rm -rf {sensor} \n"
@@ -878,6 +890,8 @@ class DataCollector(LoggerSuperclass):
         self.debug(f"Delivering script...")
         script_dest = os.path.join(f"{tmp_folder}")
         self.fileserver.send_file(script_dest, script_name, indexed=False)
+        if jpeg_compression:
+            self.info(f"JPEG compression enabled, this will take even longer than usual!")
         self.info(f"Running script to create zip file with {len(files)} files, this may take a while...")
         # Run the script!
         run_over_ssh(self.fileserver.host, script_dest + "/" + script_name, fail_exit=True)
@@ -921,32 +935,26 @@ class DataCollector(LoggerSuperclass):
         if tend:
             assert_type(tend, pd.Timestamp)
 
-        variable_ids = []
         sensors = [self.mc.get_document("sensors", sensor_id) for sensor_id in dataset["@sensors"]]
-        try:
-            # Use only variable subset
-            variable_ids  = dataset["@variables"]
-        except KeyError:
-            # Use all sensor variables
-            for sensor in sensors:
-                self.debug(f"processing {sensor['#id']}")
-                for variable in sensor["variables"]:
-                    if variable["@variables"] not in variable_ids:
-                        variable_ids.append(variable["@variables"])
-                        self.debug(f"    variable {variable['@variables']}")
 
-        # Now make sure that variables have the same units across sensors
-        variable_units = {var_id: [] for var_id in variable_ids}
-        for variable_id in variable_ids:
-            for sensor in sensors:
-                for sensor_var in sensor["variables"]:
-                    if sensor_var["@variables"] == variable_id:
-                        variable_units[variable_id].append(sensor_var["@units"])
+        var_subset = []
+        if "@variables" in dataset.keys() and dataset["@variables"] is not None:
+            var_subset = dataset["@variables"]
 
-        for var, units in variable_units.items():
-            assert len(np.unique(units)) == 1, f"Variables do not have consistent units! variable={var} units={units}"
-
-        self.debug(f"Using variables: {variable_ids}")
+        # Let's create a dict where key=varname, value=units
+        variable_units = {}
+        for sensor in sensors:
+            for var in sensor["variables"]:
+                varname = var["@variables"]
+                units = var["@units"]
+                if var_subset and not varname in var_subset:
+                    self.debug(f"Excluding variable '{varname}', subset={var_subset}")
+                elif varname not in variable_units.keys():
+                    self.debug(f"Adding {varname}")
+                    variable_units[varname] = units
+                else: # variable already added, so make sure that units are the same
+                    registered = variable_units[varname]
+                    assert units == registered, f"Units for '{varname}' not consistent! '{units}' != '{registered}'"
 
         # Using first station to get owner
         station = self.mc.get_document("stations", dataset["@stations"][0])
@@ -1040,19 +1048,10 @@ class DataCollector(LoggerSuperclass):
                 "sensor_type_uri": sensor["instrumentType"]["definition"]
             }
 
-        # Create dictionary where var_id is the key and the value is the units doc
-        units = {}
-        for var_id in variable_ids:
-            for sensor_id in dataset["@sensors"]:
-                sensor = self.mc.get_document("sensors", sensor_id)
-                for var in sensor["variables"]:
-                    if var["@variables"] == var_id:
-                        units[var_id] = self.mc.get_document("units", var["@units"])
-
-
-        for variable_id, units in units.items():
-            self.debug(f"   getting {variable_id} with units {units['symbol']}")
+        for variable_id, units_id in variable_units.items():
             variable = self.mc.get_document("variables", variable_id)
+            units = self.mc.get_document("units", units_id)
+            self.debug(f"   getting {variable_id} with units {units['symbol']}")
             varname = variable_id.replace("-", "_").replace(" ", "_")
 
             if variable["type"] == "environmental":
@@ -1135,10 +1134,18 @@ class DataCollector(LoggerSuperclass):
         with open(meta_file, "w") as f:
             yaml.dump(metadata, f)
 
-        emh.generate_dataset(data_files, [meta_file], output=output)
-        for f in data_files:
-            os.remove(f)
-        os.remove(meta_file)
+        def temp_files_cleanup(tmp_files: list):
+            for f in tmp_files:
+                if os.path.exists(f):
+                    os.remove(f)
+        try:
+            emh.generate_dataset(data_files, [meta_file], output=output)
+        except Exception as e:
+            temp_files_cleanup(data_files + [meta_file])
+            raise e
+
+        temp_files_cleanup(data_files + [meta_file])
+
         return output
 
 

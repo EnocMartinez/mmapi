@@ -32,7 +32,7 @@
   #------------------------------------------------#
     sta_db:
       build:
-        context: ./database
+        context: ./build/database
         dockerfile: Dockerfile
       image: postgres_postgis_timescaledb:local
       container_name: sta-db-test
@@ -73,8 +73,8 @@
       ports:
         - 8882:80
       volumes:
-        - ./fileserver:/data/files:ro
-        - ./nginx.conf:/etc/nginx/nginx.conf
+        - ./volumes/fileserver:/data/files:ro
+        - ./volumes/nginx.conf:/etc/nginx/nginx.conf
 
     erddap:
       container_name: erddap-mmapi-test
@@ -84,22 +84,22 @@
       ports:
         - 8090:8080
       volumes:
-        - ./conf/datasets.xml:/usr/local/tomcat/content/erddap/datasets.xml
-        - ./conf/setup.xml:/usr/local/tomcat/content/erddap/setup.xml
-        - ./erddapData:/erddapData   # bind mount for ERDDAP internal data
-        - ./datasets:/datasets # bind mount for user data files
+        - ./volumes/conf/datasets.xml:/usr/local/tomcat/content/erddap/datasets.xml
+        - ./volumes/conf/setup.xml:/usr/local/tomcat/content/erddap/setup.xml
+        - ./volumes/erddapData:/erddapData   # bind mount for ERDDAP internal data
+        - ./volumes/datasets:/datasets # bind mount for user data files
 
     ckan:
       container_name: ckan-test
       build:
-        context: ckan/
+        context: ./build/ckan/
         dockerfile: Dockerfile
         args:
           - TZ=UTC
       ports:
         - "5001:5000"
       env_file:
-        - ./ckan.env
+        - ./volumes/ckan.env
       depends_on:
         ckan_db:
           condition: service_healthy
@@ -121,9 +121,9 @@
     ckan_db:
       container_name: ckan_db_test
       build:
-        context: postgresql/
+        context: ./build/ckan-postgresql/
       env_file:
-        - ./ckan.env
+        - ./volumes/ckan.env
       environment:
         - POSTGRES_USER=postgres
         - POSTGRES_DB=postgres

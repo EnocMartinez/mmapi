@@ -412,7 +412,7 @@ class MetadataCollector(LoggerSuperclass):
         document["#creationDate"] = now
         document["#modificationDate"] = now
         document["#author"] = author
-        self.debug(f"Inserting {document_id} from {collection.lower()}")
+        self.debug(f"Inserting {document_id} to {collection.lower()}")
         contents = self.strip_metadata_fields(document)
         insert_query = sql.SQL(f"""
             INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc)
@@ -435,7 +435,6 @@ class MetadataCollector(LoggerSuperclass):
         creation_date = document["#creationDate"]
         modification_date = document["#modificationDate"]
 
-        self.debug(f"Inserting {document_id} from {collection.lower()}")
         contents = self.strip_metadata_fields(document)
         insert_query = sql.SQL(f"""
             INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc)
@@ -504,7 +503,7 @@ class MetadataCollector(LoggerSuperclass):
         metadata["#modificationDate"] = get_timestamp_string()
         metadata["#author"] = author  # update author
         metadata["#creationDate"] = old_document["#creationDate"]
-
+        self.debug(f"Replace {document_id} to {collection}, new version={metadata['#version']}")
         old_contents = {key: value for key, value in old_document.items() if not key.startswith("#")}
 
         # keep only elements that are not metadata
@@ -1182,7 +1181,7 @@ class MetadataCollector(LoggerSuperclass):
 
 
         now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-        self.debug(f"Registering dataset {dataset_id}:{resource_id}:{service}:{fmt}:{data_from}:{data_to}")
+        self.debug(f"Registering dataset {dataset_id} {resource_id} {service}{fmt} {data_from} {data_to}")
 
         table_entry_exists = self.dataset_resource_exists(dataset_id, resource_id, service, fmt, data_from, data_to)
 

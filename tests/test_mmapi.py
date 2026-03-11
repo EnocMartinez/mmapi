@@ -7,13 +7,17 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 27/5/24
 """
+
+# TODO: Test AssertionError with different variable - units for the same dataset
+# TODO: Make sure that FOI filter works by checking all "blue" data
+# TODO: Make sure that time filter is working in datasets with period=none
+
 import logging
 import random
 import shutil
 import unittest
 import os
 import sys
-
 import rich
 from threading import Thread
 import yaml
@@ -147,7 +151,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                         cls.docker_volumes.append(src)
 
         # Make sure that ERDDAP has a clean datasets.xml file
-        shutil.copy2("conf/datasets.xml.default", "conf/datasets.xml" )
+        shutil.copy2("volumes/conf/datasets.xml.default", "volumes/conf/datasets.xml" )
 
         log.info("Delete all files and folders in fileserver")
         folder = docker_config["services"]["fileserver"]["volumes"][0].split(":")[0]
@@ -227,1432 +231,119 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         d = get_json(self.mmapi_url)
         self.assertIsInstance(d, dict)
 
-    def test_02_add_unit(self):
-        """adds degC as unit"""
+    def test_02_add_units_with_mc(self):
+        """Adding ALL metadata documents via API and/or MetadataCollector"""
         
         self.log.info("Inserting several 'units' via API")
-        data = {
-            "#id": "degrees_celsius",
-            "name": "degrees Celsius",
-            "symbol": "degC",
-            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UPAA/",
-            "type": "linear"
-        }
-        a = self.mc.insert_document("units", data)
-        self.assertIsInstance(a, dict)
+        docs = file_list("metadata/units")
 
-        with self.assertRaises(NameError) as cm:
-            self.mc.insert_document("units", data)
-        the_exception = cm.exception
-        self.assertEqual(type(the_exception), NameError)
+        for filename in docs:
+            with open(filename) as f:
+                data = json.load(f)
+                # Insert units via MC
+            doc_id = data["#id"]
+            self.info(f"Insert {doc_id}")
+            a = self.mc.insert_document("units", data)
+            self.assertIsInstance(a, dict)
 
-        url = self.mmapi_url + f"/units/{data['#id']}"
-        units = get_json(url)
-        self.assertEqual(data["symbol"], units["symbol"])
-        # Make sure that update works
+            lvl = self.log.getEffectiveLevel()
+            self.log.setLevel(logging.CRITICAL)
 
-    def test_03_add_via_api(self):
-        """adding units and variables via API"""
-        
-        d = {
-            "#id": "siemens_per_metre",
-            "name": "siemens per metre1",
-            "symbol": "S/m",
-            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/",
-            "type": "linear"
-        }
-        post_json(self.mmapi_url + "/units", d)
+            with self.assertRaises(NameError) as cm:
+                self.mc.insert_document("units", data)
+            the_exception = cm.exception
+            self.assertEqual(type(the_exception), NameError)
 
-        # Ensure history
-        d = {
-            "#id": "siemens_per_metre",
-            "name": "siemens per metre2",
-            "symbol": "S/m",
-            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/",
-            "type": "linear"
-        }
-        self.mc.replace_document("units", d["#id"], d)
+            self.log.setLevel(lvl)
 
-        d1 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/1")
-        d2 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/2")
+            # Make wure we can access them via api
+            url = self.mmapi_url + f"/units/{data['#id']}"
+            units = get_json(url)
+            self.assertEqual(data["symbol"], units["symbol"])
+            # Make sure that update works
 
-        self.assertEqual(d1["name"], "siemens per metre1")
-        self.assertEqual(d2["name"], "siemens per metre2")
 
-        # Now delete siemens_per_metre from current database, but not from history
-        self.mc.delete_document("units", "siemens_per_metre")
+    def test_03_add_variables_with_api(self):
+        """adding units and variables via API and check the history"""
 
-        # Now insert it again, we should keep version history!
+        self.log.info("Inserting several 'variables' via API")
+        for filename in file_list("metadata/variables"):
+            with open(filename) as f:
+                data = json.load(f)
 
-        d = {
-            "#id": "siemens_per_metre",
-            "name": "siemens per metre",
-            "symbol": "S/m",
-            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/",
-            "type": "linear"
-        }
-        resp = post_json(self.mmapi_url + "/units", d)
+            doc_id = data["#id"]
+            original_desc = data["description"]
 
-        # Make sure that we can access the v3 from the history endpoint
-        d3 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/3")
-        self.assertEqual(d3["name"], "siemens per metre")
+            post_json(self.mmapi_url + "/variables", data)
 
-        d = {
-            "#id": "TEMP",
-            "standard_name": "sea_water_temperature",
-            "description": "in situ sea water temperature",
-            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/TEMPST01",
-            "cf_compliant": True,
-            "type": "environmental"
-        }
-        post_json(self.mmapi_url + "/variables", d)
+            data["description"] += " MODIFIED"
+            modified_desc = data["description"]
 
-        d = {
-            "#id": "CNDC",
-            "standard_name": "sea_water_electrical_conductivity",
-            "description": "sea water electrical conductivity",
-            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/CNDCST01/",
-            "cf_compliant": True,
-            "type": "environmental"
-        }
-        post_json(self.mmapi_url + "/variables", d)
-        d = {
-            "#id": "OBSEA:CTD:TEMP",
-            "instrumentType": "CTD",
-            "qartod": {
-                "gross_range_test": {
-                    "fail_span": [8, 40],
-                    "suspect_span": [10, 32]
-                },
-                "climatology_test": {
-                    "config": [
-                        {
-                            "vspan": [10.5, 16],
-                            "tspan": [1, 3],
-                            "period": "month",
-                            "zspan": [0, 100]
-                        },
-                        {
-                            "vspan": [12.3, 22],
-                            "tspan": [4, 6],
-                            "period": "month",
-                            "zspan": [0, 100]
-                        },
-                        {
-                            "vspan": [16, 28.2],
-                            "tspan": [7, 9],
-                            "period": "month",
-                            "zspan": [0, 100]
-                        },
-                        {
-                            "vspan": [12.3, 24],
-                            "tspan": [10, 12],
-                            "period": "month",
-                            "zspan": [0, 100]
-                        }
-                    ]
-                },
-                "flat_line_test": {
-                    "tolerance": 1e-05,
-                    "suspect_threshold": 100,
-                    "fail_threshold": 300
-                },
-                "rate_of_change_test": {
-                    "threshold": 0.01
-                },
-                "spike_test": {
-                    "suspect_threshold": 1,
-                    "fail_threshold": 3
-                }
-            }
-        }
-        post_json(self.mmapi_url + "/qualityControl", d)
-        d = {
-            "#id": "OBSEA:CTD:CNDC",
-            "instrumentType": "CTD",
-            "qartod": {
-                "gross_range_test": {
-                    "fail_span": [1, 6.5],
-                    "suspect_span": [2, 6]
-                },
-                "flat_line_test": {
-                    "tolerance": 1e-06,
-                    "suspect_threshold": 100,
-                    "fail_threshold": 300
-                },
-                "spike_test": {
-                    "suspect_threshold": 0.05,
-                    "fail_threshold": 0.2
-                },
-                "rate_of_change_test": {
-                    "threshold": 0.001
-                }
-            }
-        }
-        post_json(self.mmapi_url + "/qualityControl", d)
+            # Replace document with another name and make sure that we can still keep track of the verisons
+            self.mc.replace_document("variables", doc_id, data)
+            d1 = get_json(self.mmapi_url + f"/variables/{doc_id}/history/1")
+            d2 = get_json(self.mmapi_url + f"/variables/{doc_id}/history/2")
+            self.assertEqual(d1["description"], original_desc)
+            self.assertEqual(d2["description"],  modified_desc)
 
-    def test_04_assert_schema(self):
-        """trying to insert a non-compliant document to catch the exception"""
-        
-        self.info("Inserting an erroneous unit")
-        d = {
-            "#id": "CNDC2",
-            "standard_nam2e": "sea_water_electrical_conductivity",
-            "descriptiodn": "sea water electrical conductivity",
-            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/CNDCST01/",
-            "cf_compdliant": True,
-            "type": "environmental"
-        }
-        with self.assertRaises(ValueError) as cm:
-            self.mc.insert_document("variables", d)
+            data["description"] = original_desc
 
-        d = {
-            "#id": "CNDC",
-            "standard_name": "sea_water_electrical_conductivity",
-            "description": "sea water electrical conductivity UPDATED",
-            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/CNDCST01/",
-            "cf_compliant": True,
-            "type": "environmental"
-        }
-        self.info("Updating a document")
-        self.mc.insert_document("variables", d, update=True)
+            # Revert to first version using API
+            patch_json(self.mmapi_url + f"/variables/{doc_id}", data)
 
-    def test_05_add_process(self):
+    def test_04_insert_all_metadata(self):
+        self.info("Load ALL documents from 'metadata' folder")
+        collections = [
+            "organizations",
+            "people",
+            "processes",
+            "programmes",
+            "projects",
+            "qualityControl",
+            "resources",
+            "sensors",
+            "stations",
+            "activities",
+            "operations",
+            "datasets",
+            # "units",  # already integrated in test 02
+            #"variables" # already integrated in test 03
+        ]
+        for collection in collections:
+            docs = file_list(os.path.join("metadata", collection))
+            for doc in docs:
+                with open(doc) as f:
+                    data = json.load(f)
+                # Insert all documents
+                self.info(f"Inserting collection '{collection}' doc='{data['#id']}'")
+                self.mc.insert_document(collection, data)
+
+    def test_05_insert_wrong_metadata(self):
+        self.info("Load WRONG documents from 'metadata' folder")
+        collections = ["processes", "programmes", "projects", "qualityControl", "resources", "sensors", "stations",
+                       "activities", "operations", "datasets", "units", "variables"]
+        for collection in collections:
+            folder = os.path.join("metadata", collection + ".errors")
+            if not os.path.exists(folder):
+                continue
+            docs = file_list(folder)
+            for doc in docs:
+                with open(doc) as f:
+                    data = json.load(f)
+                # Insert all documents
+            # supress logs
+            lvl = self.log.getEffectiveLevel()
+            self.log.setLevel(logging.CRITICAL)
+            with self.assertRaises(ValueError):
+                self.mc.insert_document(collection, data)
+            self.log.setLevel(lvl)
+
+    def test_06_metadata_checks(self):
         """Adding average process"""
-        
-        avg = {
-            "#id": "average",
-            "type": "average",
-            "name": "Simple average the measure",
-            "description": "Averages sensor variables over a period of time (period parameter, e.g. 30min, 1day). If a "
-                           "certain variable should not be averaged, add it to the ignore list",
-            "reference": "https://en.wikipedia.org/wiki/Average",
-            "parameters": {
-                "period": "period to average (string)",
-                "ignore": "list of variables to ignore when averaging"
-            }
-        }
-        self.mc.insert_document("processes", avg)
 
-    def test_06_add_organization_people(self):
-        """Adding organization process"""
-        
-        d = {
-            "#id": "upc",
-            "fullName": "Universitat Politècnica de Catalunya",
-            "acronym": "UPC",
-            "ROR": "https://ror.org/03mb6wj31",
-            "EDMO": "https://edmo.seadatanet.org/report/2150",
-            "public": True,
-            "logoUrl": "http://testfiles.obsea.es/files/other/logos/upc.png",
-            "alternativeNames": []
-        }
-        self.mc.insert_document("organizations", d)
-        d = {
-            "#id": "enoc_martinez",
-            "name": "Enoc Martinez",
-            "givenName": "Enoc",
-            "familyName": "Martinez",
-            "orcid": "0000-0003-1233-7105",
-            "email": "enoc.martinez@upc.edu",
-            "affiliations": [{"@organizations": "upc", "start": "2015-01-01"}],
-            "@organizations": "upc"
-        }
-        self.mc.insert_document("people", d)
-
-    def test_07_station(self):
-        """Register station and its deployment"""
-        
-        d = {
-            "#id": "OBSEA",
-            "shortName": "OBSEA",
-            "longName": "OBSEA Expandable Seafloor Observatory",
-            "description": "OBSEA is a cabled seafloor observatory deployed at the North-west mediterranean (Vilanova i"
-                           " la Geltrú, Spain)",
-            "platformType": {
-                "definition": "http://vocab.nerc.ac.uk/collection/L06/current/48/",
-                "label": "mooring"
-            },
-            "wmo_number": "6103565",
-            "oso": {
-                "regionalFacility": {
-                    "label": "Balearic Sea",
-                    "definition": ""
-                },
-                "site": {
-                    "label": "OBSEA",
-                    "definition": ""
-                },
-                "platform": {
-                    "label": "OBSEA seabed station",
-                    "definition": ""
-                }
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "dataManager"
-                },
-                {
-                    "@organizations": "upc",
-                    "role": "owner"
-                },
-            ],
-            "defaults": {
-                "@programmes": "OBSEA"
-            },
-            "pictures": {
-                "reference": "https://does.not.exist"
-            }
-
-        }
-        self.mc.insert_document("stations", d)
-
-        d = {
-            "#id": "OBSEA_deployment_20090519",
-            "name": "OBSEA initial deployment",
-            "time": "2009-05-19T00:00:00Z",
-            "type": "deployment",
-            "appliedTo": {
-                "@stations": "OBSEA"
-            },
-            "status": "done",
-            "where": {
-                "position": {
-                    "depth": 20.0,
-                    "latitude": 41.18212,
-                    "longitude": 1.75257
-                }
-            },
-            "description": "Initial OBSEA deployment"
-        }  # OBSEA deployment
-        self.mc.insert_document("activities", d)
-
-        d = {
-            "#id": "OBSEA_deployment_20150519",
-            "name": "OBSEA second deployment",
-            "time": "2015-05-19T00:00:00Z",
-            "type": "deployment",
-            "appliedTo": {
-                "@stations": "OBSEA"
-            },
-            "status": "done",
-            "where": {
-                "position": {
-                    "depth": 20.0,
-                    "latitude": 41.18212,
-                    "longitude": 1.75257
-                }
-            },
-            "description": "Initial OBSEA deployment"
-        }  # OBSEA older deployment
-        self.mc.insert_document("activities", d)
+        # Assess two OBSEA deployments
         self.assertEqual(len(get_station_deployments(self.mc, "OBSEA")), 2)
 
-
-    def test_08_add_sensor(self):
-        """Adding sensor"""
-        
-        d = {
-            "#id": "SBE37",
-            "description": "SBE37 CTD sensor at OBSEA",
-            "shortName": "SBE37",
-            "serialNumber": "37SMP47472-5496",
-            "longName": "CTD SBE37 at OBSEA",
-            "instrumentType": {
-                "id": "CTD",
-                "definition": "http://vocab.nerc.ac.uk/collection/L05/current/130",
-                "label": "CTD"
-            },
-            "manufacturer": {
-                "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0013/",
-                "label": "Sea-Bird Scientific"
-            },
-            "model": {
-                "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL1457/",
-                "label": "SBE 37 MicroCat SMP-CTP"
-            },
-            "variables": [
-                {
-                    "@variables": "TEMP",
-                    "@units": "degrees_celsius",
-                    "@qualityControl": "OBSEA:CTD:TEMP",
-                    "dataType": "timeseries"
-                },
-                {
-                    "@variables": "CNDC",
-                    "@units": "siemens_per_metre",
-                    "@qualityControl": "OBSEA:CTD:CNDC",
-                    "dataType": "timeseries"
-                },
-                {
-                    "@variables": "TEMP",
-                    "@units": "degrees_celsius",
-                    "@qualityControl": "OBSEA:CTD:TEMP",
-                    "dataType": "profiles"
-                },
-                {
-                    "@variables": "CNDC",
-                    "@units": "siemens_per_metre",
-                    "@qualityControl": "OBSEA:CTD:CNDC",
-                    "dataType": "profiles"
-                },
-            ],
-            "documentation": {
-                "manual": "https://does.not.exist",
-                "calibrations": []
-            },
-            "processes": [
-                {
-                    "@processes": "average",
-                    "parameters": {
-                        "period": "30min",
-                        "ignore": []
-                    }
-                },
-                {
-                    "@processes": "average",
-                    "parameters": {
-                        "period": "1day",
-                        "ignore": []
-                    }
-                }
-            ],
-            "pictures": {
-                "reference": "https://does.not.exist"
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "dataManager"
-                }
-            ],
-            "dataMode": "real-time"
-        }  # SBE37
-        self.mc.insert_document("sensors", d)
-        d = {
-            "#id": "SBE16",
-            "description": "SBE16 CTD sensor at OBSEA",
-            "shortName": "SBE16",
-            "serialNumber": "16XXXX",
-            "longName": "CTD SBE16 at OBSEA",
-            "instrumentType": {
-                "id": "CTD",
-                "definition": "http://vocab.nerc.ac.uk/collection/L05/current/130",
-                "label": "CTD"
-            },
-            "manufacturer": {
-                "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0013/",
-                "label": "Sea-Bird Scientific"
-            },
-            "model": {
-                "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL1457/",
-                "label": "SBE 16 MicroCat SMP-CTP"
-            },
-            "variables": [
-                {
-                    "@variables": "TEMP",
-                    "@units": "degrees_celsius",
-                    "@qualityControl": "OBSEA:CTD:TEMP",
-                    "dataType": "timeseries"
-                },
-                {
-                    "@variables": "CNDC",
-                    "@units": "siemens_per_metre",
-                    "@qualityControl": "OBSEA:CTD:CNDC",
-                    "dataType": "timeseries"
-                },
-                {
-                    "@variables": "TEMP",
-                    "@units": "degrees_celsius",
-                    "@qualityControl": "OBSEA:CTD:TEMP",
-                    "dataType": "profiles"
-                },
-                {
-                    "@variables": "CNDC",
-                    "@units": "siemens_per_metre",
-                    "@qualityControl": "OBSEA:CTD:CNDC",
-                    "dataType": "profiles"
-                },
-            ],
-            "documentation": {
-                "manual": "https://does.not.exist",
-                "calibrations": []
-            },
-            "pictures": {
-                "reference": "https://does.not.exist"
-            },
-            "processes": [
-                {
-                    "@processes": "average",
-                    "parameters": {
-                        "period": "30min",
-                        "ignore": []
-                    }
-                },
-                {
-                    "@processes": "average",
-                    "parameters": {
-                        "period": "1day",
-                        "ignore": []
-                    }
-                }
-            ],
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "dataManager"
-                }
-            ],
-            "dataMode": "real-time"
-        }  # SBE16
-        self.mc.insert_document("sensors", d)
-
-        d = {
-            "#id": "sbe37depl",
-            "name": "SBE37 deployment",
-            "time": "2020-01-01T00:00:00Z",
-            "type": "deployment",
-            "appliedTo": {
-                "@sensors": "SBE37"
-            },
-            "status": "done",
-            "where": {
-                "@stations": "OBSEA"
-            },
-            "description": "Desplegat el SBE37 a l'OBSEA"
-        }  # SBE37 deployment
-        self.mc.insert_document("activities", d)
-        d = {
-            "#id": "sbe16depl",
-            "name": "SBE16 deployment",
-            "time": "2022-01-01T00:00:00Z",
-            "type": "deployment",
-            "appliedTo": {
-                "@sensors": "SBE16"
-            },
-            "status": "done",
-            "where": {
-                "@stations": "OBSEA"
-            },
-            "description": "Desplegat el SBE16 a l'OBSEA"
-        }  # SBE16 deployment
-        self.mc.insert_document("activities", d)
-
-
-    def test_09_programme(self):
-        """insert programme"""
-        
-        d = {
-            "#id": "OBSEA",
-            "description": "Long term monitoring of the OBSEA underwater observatory area",
-            "@projects": [],
-            "geoJsonFeature": {
-                "type": "Feature",
-                "properties": {},
-                "geometry": {
-                    "coordinates": [
-                        [
-                            [
-                                1.7515221855838945,
-                                41.183341295396275
-                            ],
-                            [
-                                1.7515221855838945,
-                                41.181307814018794
-                            ],
-                            [
-                                1.7538603482693702,
-                                41.181307814018794
-                            ],
-                            [
-                                1.7538603482693702,
-                                41.183341295396275
-                            ],
-                            [
-                                1.7515221855838945,
-                                41.183341295396275
-                            ]
-                        ]
-                    ],
-                    "type": "Polygon"
-                }
-            }
-        }
-        d2 = {
-            "#id": "OBSEA_Biotop_Blue",
-            "description": "Biotope in front of OBSEA, blue squares",
-            "@projects": [],
-            "geoJsonFeature": {
-                "type": "Feature",
-                "properties": {},
-                "geometry": {
-                    "coordinates": [
-                        [
-                            [
-                                1.7515221855838945,
-                                41.183341295396275
-                            ],
-                            [
-                                1.7515221855838945,
-                                41.181307814018794
-                            ],
-                            [
-                                1.7538603482693702,
-                                41.181307814018794
-                            ],
-                            [
-                                1.7538603482693702,
-                                41.183341295396275
-                            ],
-                            [
-                                1.7515221855838945,
-                                41.183341295396275
-                            ]
-                        ]
-                    ],
-                    "type": "Polygon"
-                }
-            }
-        }
-        d3 = {
-            "#id": "OBSEA_Biotop_Red",
-            "description": "Biotope in front of OBSEA, red squares",
-            "@projects": [],
-            "geoJsonFeature": {
-                "type": "Feature",
-                "properties": {},
-                "geometry": {
-                    "coordinates": [
-                        [
-                            [
-                                1.7515221855838945,
-                                41.183341295396275
-                            ],
-                            [
-                                1.7515221855838945,
-                                41.181307814018794
-                            ],
-                            [
-                                1.7538603482693702,
-                                41.181307814018794
-                            ],
-                            [
-                                1.7538603482693702,
-                                41.183341295396275
-                            ],
-                            [
-                                1.7515221855838945,
-                                41.183341295396275
-                            ]
-                        ]
-                    ],
-                    "type": "Polygon"
-                }
-            }
-        }
-        self.mc.insert_document("programmes", d)
-        self.mc.insert_document("programmes", d2)
-        self.mc.insert_document("programmes", d3)
-
-
-    def test_10_add_profile_sensor(self):
-        """Adding a sensor with profile data"""
-        
-        d = {
-            "#id": "degrees_north",
-            "name": "degrees north",
-            "symbol": "deg",
-            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UAAA/",
-            "type": "linear"
-        }
-        post_json(self.mmapi_url + "/units", d)
-
-        d = {
-            "#id": "meters_per_second",
-            "name": "meters per second",
-            "symbol": "m/s",
-            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UVAA/",
-            "type": "linear"
-        }
-        post_json(self.mmapi_url + "/units", d)
-
-        d = {
-            "#id": "CDIR",
-            "standard_name": "sea_water_velocity_to_direction",
-            "description": "direction towards the sea water is flowing (currents)",
-            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/LCDAAP01/",
-            "polar": {
-                "module": "CSPD",
-                "angle": "CDIR"
-            },
-            "cf_compliant": True,
-            "type": "environmental"
-        }  # CDIR
-        post_json(self.mmapi_url + "/variables", d)
-
-        d = {
-            "#id": "CSPD",
-            "standard_name": "sea_water_speed",
-            "description": "Horizontal velocity of the water column (currents)",
-            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/LCSAAP01",
-            "polar": {
-                "module": "CSPD",
-                "angle": "CDIR"
-            },
-            "cf_compliant": True,
-            "type": "environmental"
-        }  # CSPD
-        post_json(self.mmapi_url + "/variables", d)
-
-        d = {
-            "#id": "UCUR",
-            "standard_name": "eastward_sea_water_velocity",
-            "description": "eastward velocity of water current in the water body",
-            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/LCEWZZ01/",
-            "cf_compliant": True,
-            "type": "environmental"
-        }  # UCUR
-        post_json(self.mmapi_url + "/variables", d)
-
-        d = {
-            "#id": "VCUR",
-            "standard_name": "northward_sea_water_velocity",
-            "description": "northward velocity of water current in the water body",
-            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/LCNSZZ01/",
-            "cf_compliant": True,
-            "type": "environmental"
-        }  # VCUR
-        post_json(self.mmapi_url + "/variables", d)
-
-        d = {
-            "#id": "AWAC",
-            "shortName": "AWAC",
-            "longName": "AWAC-AST 1 MHz ADCP",
-            "description": "AWAC-AST 1 MHz current profiler at OBSEA",
-            "serialNumber": "WAV 5931",
-            "instrumentType": {
-                "label": "Current Profiler",
-                "id": "ADCP",
-                "definition": "http://vocab.nerc.ac.uk/collection/L05/current/115"
-            },
-            "manufacturer": {
-                "label": "Nortek",
-                "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0068/"
-            },
-            "model": {
-                "label": "AWAC-AST 1 MHz",
-                "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL0897/"
-            },
-            "documentation": {
-                "manual": "https://does.not.exist",
-                "calibrations": []
-            },
-            "pictures": {
-                "reference": "https://does.not.exist"
-            },
-            "variables": [
-                {
-                    "@variables": "CSPD",
-                    "@units": "meters_per_second",
-                    "dataType": "profiles"
-                },
-                {
-                    "@variables": "CDIR",
-                    "@units": "degrees_north",
-                    "dataType": "profiles"
-                },
-                {
-                    "@variables": "UCUR",
-                    "@units": "meters_per_second",
-                    "dataType": "profiles"
-                },
-                {
-                    "@variables": "VCUR",
-                    "@units": "meters_per_second",
-                    "dataType": "profiles"
-                }
-            ],
-            "processes": [
-                {
-                    "@processes": "average",
-                    "parameters": {
-                        "period": "30min",
-                    }
-                }
-            ],
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "dataManager"
-                },
-                {
-                    "@organizations": "upc",
-                    "role": "owner"
-                }
-            ],
-            "dataMode": "real-time"
-        }  # AWAC sensor
-        post_json(self.mmapi_url + "/sensors", d)
-
-        d = {
-            "#id": "awacdeployment",
-            "name": "SBE37 deployment",
-            "time": "2023-01-01T00:00:00Z",
-            "type": "deployment",
-            "status": "done",
-            "appliedTo": {
-                "@sensors": "AWAC"
-            },
-            "where": {
-                "@stations": "OBSEA"
-            },
-            "description": "Desplegat el SBE37 a l'OBSEA"
-        }  # AWAC deployment
-        self.mc.insert_document("activities", d)
-
-
-    def test_11_add_camera(self):
-        """Adding a Camera, that will produce files, inference and detections data"""
-        
-        d = {
-            "#id": "dimensionless",
-            "name": "Dimensionless",
-            "symbol": "Dmnless",
-            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UUUU",
-            "type": "linear"
-        }  # Dimensionless uints
-        post_json(self.mmapi_url + "/units", d)
-
-        d = {
-            "#id": "underwater_photography",
-            "standard_name": "underwater_photography",
-            "description": "underwater photography",
-            "definition": "http://vocab.nerc.ac.uk/collection/P03/current/UWPH/",
-            "cf_compliant": False,
-            "type": "environmental"
-        }  # underwater photography
-        post_json(self.mmapi_url + "/variables", d)
-
-        d = {
-            "#id": "FATX",
-            "standard_name": "fish_abundance",
-            "description": "Fish abundance in water bodies",
-            "definition": "https://vocab.nerc.ac.uk/collection/P02/current/FATX/",
-            "cf_compliant": False,
-            "type": "environmental"
-        }  # FATX (fish abundance)
-        post_json(self.mmapi_url + "/variables", d)
-
-        d = {
-            "#id": "diplodus_vulgaris",
-            "description": "Abundance of Diplodus vulgaris in sea water",
-            "standard_name": "Diplodus vulgaris",
-            "definition": "https://www.marinespecies.org/aphia.php?p=taxdetails&id=127054",
-            "type": "biodiversity",
-            "cf_compliant": False,
-            "worms_id": "127054"
-        }  # Diplodus vulgaris
-        post_json(self.mmapi_url + "/variables", d)
-
-        d = {
-            "#id": "chromis_chromis",
-            "description": "Abundance of Chromis chromis in sea water",
-            "standard_name": "Chromis chromis",
-            "definition": "https://www.marinespecies.org/aphia.php?p=taxdetails&id=127000",
-            "type": "biodiversity",
-            "cf_compliant": False,
-            "worms_id": "127000"
-        }  # Chromis chromis
-        post_json(self.mmapi_url + "/variables", d)
-
-        d = {
-            "#id": "YOLOv8",
-            "name": "YOLOv8l_18sp_2361img",
-            "algorithm": "YOLOv8",
-            "type": "json",
-            "description": "YOLOv8 large trained with 18 species, 2361 images, learning rate 0.000375 and image size 1920 px",
-            "notes": "Variable names correspond to @variables standard_name field",
-            "weights": "https://my.url/file",
-            "trainingConfig": "https://my.url/filex",
-            "trainingData": "",
-            "reference": "https://description.of.my.model",
-            "variableNames": [
-                "Chromis chromis",
-                "Diplodus vulgaris",
-                "Diver"
-            ],
-            "ignore": [
-                "Diver"
-            ],
-            "rename": {},
-            "parameters": {}
-        }  # YOLOv8 process
-        post_json(self.mmapi_url + "/processes", d)
-
-        d = {
-            "#id": "IPC608",
-            "shortName": "IPC608_8B64_165",
-            "serialNumber": "IPC60820221105AAWRK84213991",
-            "description": "IPC608 underwater camera",
-            "longName": "IPC608 underwater camera",
-            "instrumentType": {
-                "definition": "http://vocab.nerc.ac.uk/collection/L05/current/311",
-                "label": "cameras",
-                "id": "cameras"
-            },
-            "manufacturer": {
-                "definition": "LINOVISION",
-                "label": "LINVISION"
-            },
-            "model": {
-                "definition": "",
-                "label": "IPC608UW-10"
-            },
-            "variables": [
-                {
-                    "@variables": "FATX",
-                    "@units": "dimensionless",
-                    "dataType": "detections"
-                },
-                {
-                    "@variables": "underwater_photography",
-                    "@units": "dimensionless",
-                    "dataType": "files"
-                }
-            ],
-            "documentation": {
-                "manual": "https://does.not.exist",
-                "calibrations": []
-            },
-            "pictures": {
-                "reference": "https://does.not.exist"
-            },
-            "processes": [
-                {
-                    "@processes": "YOLOv8",
-                    "parameters": {}
-                }
-            ],
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "dataManager"
-                },
-                {
-                    "@organizations": "upc",
-                    "role": "owner"
-                }
-            ],
-            "dataMode": "real-time"
-        }  # IPC608 camera
-        post_json(self.mmapi_url + "/sensors", d)
-
-        d = {
-            "#id": "ipc_camera_deployment",
-            "name": "IPC608 deployment",
-            "time": "2023-01-01T00:00:00Z",
-            "type": "deployment",
-            "appliedTo": {
-                "@sensors": "IPC608"
-            },
-            "status": "done",
-            "where": {
-                "@stations": "OBSEA"
-            },
-            "fieldOfView": {
-                "@programmes": "OBSEA_Biotop"
-            },
-            "description": "Desplegat el IPC608 a l'OBSEA"
-        }  # IPC608 camera deployment
-        post_json(self.mmapi_url + "/activities", d)
-
-
-    def test_12_add_projects(self):
-        
-        d = {
-            "#id": "Geo-INQUIRE",
-            "type": "european",
-            "acronym": "Geo-INQUIRE",
-            "title": "Geosphere INfrastructures for QUestions into Integrated REsearch",
-            "totalBudget": 13923475.77,
-            "dateStart": "2022-10-01",
-            "dateEnd": "2026-09-30",
-            "active": True,
-            "funding": {
-                "grantId": "101058518",
-                "@organizations": "ec",
-                "call": "HORIZON-INFRA-2021-SERV-01",
-                "coordinator": "GFZ",
-                "partnershipType": "thirdParty"
-            },
-            "ourBudget": 43750.0,
-            "logoUrl": ""
-        }
-        self.mc.insert_document("projects", d)
-
-
-    def test_13_add_datasets(self):
-        d = {
-            "#id": "obsea_ctd_full",
-            "title": "CTD data at OBSEA Underwater Observatory full data",
-            "summary": "CTD data measured at OBSEA underwater observatory full data",
-            "@sensors": [
-                "SBE37",
-                "SBE16"
-            ],
-            "@stations": ["OBSEA"],
-            "dataType": "timeseries",
-            "dataSourceOptions": {
-                "fullData": True
-            },
-            "export": {
-                "erddap": {
-                    "resources": [{
-                        "id": "OBSEA_CTD_full",
-                        "host": "localhost",
-                        "path": "datasets/obsea_ctd_full",
-                        "period": "daily",
-                        "format": "netcdf",
-                        "dataType": "timeseries"
-                    }]
-                },
-                "fileserver": {
-                    "resources": [{
-                        "host": "localhost",
-                        "path": "./fileserver/datasets/obsea_ctd_full",
-                        "period": "monthly",
-                        "format": "netcdf",
-                        "id": "netcdf_dataset",
-                        "dataType": "timeseries"
-                    }]
-                },
-                "ckan": {
-                    "resources": [{
-                        "id": "netcdf_dataset",
-                        "link": "$fileserver/netcdf_dataset",
-                        "title": "CTD data at OBSEA observatory full data",
-                        "description": "data from various CTD sensors at OBSEA observatory full data"
-                    }]
-                }
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "DataCurator"
-                },
-                {
-                    "@people": "enoc_martinez",
-                    "role": "ProjectLeader"
-                },
-                {
-                    "@organizations": "upc",
-                    "role": "RightsHolder"
-                }
-            ],
-            "funding": {
-                "@projects": [
-                    "Geo-INQUIRE"
-                ]
-            }
-        }  # obsea_ctd_full
-        self.mc.insert_document("datasets", d)
-
-        d = {
-            "#id": "obsea_ctd_30min",
-            "title": "CTD data at OBSEA Underwater Observatory 30 min average",
-            "summary": "CTD data measured at OBSEA underwater observatory averaged every 30min",
-            "@sensors": [
-                "SBE37",
-                "SBE16"
-            ],
-            "@stations": ["OBSEA"],
-            "dataType": "timeseries",
-            "dataSourceOptions": {
-                "fullData": False,
-                "averagePeriod": "30min"
-            },
-            "export": {
-                "erddap": {
-                    "resources": [{
-                        "id": "OBSEA_CTD_30min",
-                        "host": "localhost",
-                        "path": "./datasets",
-                        "period": "monthly",
-                        "format": "netcdf",
-                        "dataType": "timeseries",
-                        "averagePeriod": "30min"
-                    }]
-                },
-                "fileserver": {
-                    "resources": [{
-                        "id": "netcdf_dataset",
-                        "host": "localhost",
-                        "path": "./fileserver/datasets/obsea_ctd_30min",
-                        "period": "yearly",
-                        "format": "netcdf",
-                        "dataType": "timeseries"
-                    }]
-                },
-                "ckan": {
-                    "resources": [{
-                        "id": "ctd",
-                        "link": "$fileserver/netcdf_dataset",
-                        "title": "CTD data at OBSEA observatory 30 min average",
-                        "description": "data from various CTD sensors at OBSEA observatory averaged every 30min"
-                    }]
-                }
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "DataCurator"
-                },
-                {
-                    "@people": "enoc_martinez",
-                    "role": "ProjectLeader"
-                },
-                {
-                    "@organizations": "upc",
-                    "role": "RightsHolder"
-                }
-            ],
-            "funding": { "@projects": ["Geo-INQUIRE"] }
-        }
-
-        self.mc.insert_document("datasets", d)
-
-        d = {
-            "#id": "awac_full",
-            "title": "AWAC current profiler data full",
-            "summary": "AWAC current profiler data",
-            "@sensors": ["AWAC"],
-            "@stations": ["OBSEA"],
-            "dataType": "profiles",
-            "dataSourceOptions": {
-                "fullData": True,
-            },
-            "export": {
-                "erddap": {
-                    "resources": [{
-                        "id": "awac_dataset",
-                        "host": "localhost",
-                        "path": "./datasets",
-                        "period": "monthly",
-                        "format": "netcdf",
-                        "dataType": "profiles",
-                        "averagePeriod": "30min"
-                    }]
-                },
-                "fileserver": {
-                    "resources": [{
-                        "id": "netcdf_dataset",
-                        "host": "localhost",
-                        "path": "./fileserver/datasets/awac_dataset_full",
-                        "period": "yearly",
-                        "format": "netcdf",
-                        "dataType": "profiles"
-                    }]
-                },
-                "ckan": {
-                    "resources": [{
-                        "id": "ctd",
-                        "link": "$fileserver/netcdf_dataset",
-                        "title": "AWAC full data dataset",
-                        "description": "AWAC full data dataset",
-                    }]
-                }
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "DataCurator"
-                },
-                {
-                    "@people": "enoc_martinez",
-                    "role": "ProjectLeader"
-                },
-                {
-                    "@organizations": "upc",
-                    "role": "RightsHolder"
-                }
-            ],
-            "funding": {"@projects": ["Geo-INQUIRE"]}
-        }
-        self.mc.insert_document("datasets", d)
-
-        d = {
-            "#id": "awac_30min",
-            "title": "AWAC current profiler data 30min",
-            "summary": "AWAC current profiler data",
-            "@sensors": ["AWAC"],
-            "@stations": ["OBSEA"],
-            "dataType": "profiles",
-            "dataSourceOptions": {
-                "fullData": False,
-                "averagePeriod": "30min"
-            },
-            "export": {
-                "erddap": {
-                    "resources": [{
-                        "id": "awac_dataset",
-                        "host": "localhost",
-                        "path": "./datasets",
-                        "period": "monthly",
-                        "format": "netcdf",
-                        "dataType": "profiles",
-                        "averagePeriod": "30min"
-                    }]
-                },
-                "fileserver": {
-                    "resources": [{
-                        "id": "netcdf_dataset",
-                        "host": "localhost",
-                        "path": "./fileserver/datasets/awac_dataset_full",
-                        "period": "yearly",
-                        "format": "netcdf",
-                        "dataType": "profiles"
-                    }]
-                },
-                "ckan": {
-                    "resources": [{
-                        "id": "ctd",
-                        "link": "$fileserver/netcdf_dataset",
-                        "title": "AWAC full data dataset",
-                        "description": "AWAC full data dataset",
-                    }]
-                }
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "DataCurator"
-                },
-                {
-                    "@people": "enoc_martinez",
-                    "role": "ProjectLeader"
-                },
-                {
-                    "@organizations": "upc",
-                    "role": "RightsHolder"
-                }
-            ],
-            "funding": {"@projects": ["Geo-INQUIRE"]}
-        }
-        self.mc.insert_document("datasets", d)
-
-        d = {
-            "#id": "IPC608_pics",
-            "title": "Underwater photography at OBSEA",
-            "summary": "Underwater photography at OBSEA",
-            "@sensors": [
-                "IPC608"
-            ],
-            "@stations": ["OBSEA"],
-            "dataSourceOptions": {
-                "host": "localhost"
-            },
-            "dataType": "files",
-            "export": {
-                "fileserver": {
-                    "resources": [{
-                        "id": "zip_pics",
-                        "host": "localhost",
-                        "path": "./fileserver/datasets/IPC608_pics",
-                        "period": "yearly",
-                        "format": "zip",
-                        "dataType": "files"
-                    }]
-                },
-                "ckan": {
-                    "resources": [{
-                        "id": "zip",
-                        "link": "$fileserver/zip_pics",
-                        "title": "Pictures from camera IPC608 at OBSEA",
-                        "description": "pictures taken from a IPC608 camera at OBSEA"
-                    }]
-                }
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "DataCurator"
-                },
-                {
-                    "@people": "enoc_martinez",
-                    "role": "ProjectLeader"
-                },
-
-                {
-                    "@organizations": "upc",
-                    "role": "RightsHolder"
-                }
-            ]
-        }  # underwater pictures dataset
-        self.mc.insert_document("datasets", d)
-
-        # PICs with only BLUE squres
-        d = {
-            "#id": "IPC608_pics_blue",
-            "title": "Underwater photography at OBSEA (only blue squares)",
-            "summary": "Underwater photography at OBSEA (only blue squares)",
-            "@sensors": [
-                "IPC608"
-            ],
-            "@stations": ["OBSEA"],
-            "dataSourceOptions": {
-                "host": "localhost"
-            },
-            "constraints": {
-              "fieldOfView": {"@programmes": "OBSEA_Biotop_Blue"}
-            },
-            "dataType": "files",
-            "export": {
-                "fileserver": {
-                    "resources": [{
-                        "id": "zip_pics",
-                        "host": "localhost",
-                        "path": "./fileserver/datasets/IPC608_pics_blue",
-                        "period": "yearly",
-                        "format": "zip",
-                        "dataType": "files"
-                    }]
-                },
-                "ckan": {
-                    "resources": [{
-                        "id": "zip",
-                        "link": "$fileserver/zip_pics",
-                        "title": "Pictures from camera IPC608 at OBSEA",
-                        "description": "pictures taken from a IPC608 camera at OBSEA"
-                    }]
-                }
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "DataCurator"
-                },
-                {
-                    "@people": "enoc_martinez",
-                    "role": "ProjectLeader"
-                },
-
-                {
-                    "@organizations": "upc",
-                    "role": "RightsHolder"
-                }
-            ]
-        }  # underwater pictures dataset
-        self.mc.insert_document("datasets", d)
-
-        # PICs with only RED squares
-        d = {
-            "#id": "IPC608_pics_red",
-            "title": "Underwater photography at OBSEA (only blue squares)",
-            "summary": "Underwater photography at OBSEA (only blue squares)",
-            "@sensors": [
-                "IPC608"
-            ],
-            "@stations": ["OBSEA"],
-            "dataSourceOptions": {
-                "host": "localhost"
-            },
-            "constraints": {
-              "fieldOfView": {"@programmes": "OBSEA_Biotop_Red"}
-            },
-            "dataType": "files",
-            "export": {
-                "fileserver": {
-                    "resources": [{
-                        "id": "zip_pics",
-                        "host": "localhost",
-                        "path": "./fileserver/datasets/IPC608_pics_red",
-                        "period": "yearly",
-                        "format": "zip",
-                        "dataType": "files"
-                    }]
-                },
-                "ckan": {
-                    "resources": [{
-                        "id": "zip",
-                        "link": "$fileserver/zip_pics",
-                        "title": "Pictures from camera IPC608 at OBSEA",
-                        "description": "pictures taken from a IPC608 camera at OBSEA"
-                    }]
-                }
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "DataCurator"
-                },
-                {
-                    "@people": "enoc_martinez",
-                    "role": "ProjectLeader"
-                },
-
-                {
-                    "@organizations": "upc",
-                    "role": "RightsHolder"
-                }
-            ]
-        }  # underwater pictures dataset
-        self.mc.insert_document("datasets", d)
-
-        d = {
-            "#id": "biodiversity_datasets",
-            "title": "Biodiversity at OBSEA",
-            "summary": "Fish detections from underwater photography by an AI model",
-            "@sensors": [
-                "IPC608"
-            ],
-            "@stations": ["OBSEA"],
-            "dataSourceOptions": {
-                "host": "localhost"
-            },
-            "dataType": "detections",
-            "export": {
-                "fileserver": {
-                    "resources": [
-                    {
-                        "id": "darwin_core_dataset",
-                        "host": "localhost",
-                        "path": "./fileserver/datasets/biodiversity_datasets",
-                        "period": "yearly",
-                        "format": "dwca",
-                        "dataType": "json"
-                    }
-                    ]
-                },
-                "ckan": {
-                    "resources": [{
-                        "id": "darwin_core_dataset",
-                        "link": "$fileserver/darwin_core_dataset",
-                        "title": "Fish detections",
-                        "description": "Fish detections in CSV format"
-                    }]
-                }
-            },
-            "contacts": [
-                {
-                    "@people": "enoc_martinez",
-                    "role": "DataCurator"
-                },
-                {
-                    "@people": "enoc_martinez",
-                    "role": "ProjectLeader"
-                },
-
-                {
-                    "@organizations": "upc",
-                    "role": "RightsHolder"
-                }
-            ],
-            "constraints": {
-                "@processes": "YOLOv8"
-            }
-        }  # underwater pictures dataset
-        self.mc.insert_document("datasets", d)
 
 
     def test_20_propagate_to_sensorthings(self):
@@ -1669,10 +360,18 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         sys.stdout = open(os.devnull, 'w')
         mapi = Thread(target=run_sta_timeseries_api, args=["sta-timeseries.env", self.log, 8081], daemon=True)
         mapi.start()
-        time.sleep(0.1)
+        time.sleep(1)
         sys.stdout = sys.__stdout__
-        d = get_json(self.sta_ts_url)
-        self.assertIsInstance(d, dict)
+        timeout = 10
+        tinit = time.time()
+        while time.time() - tinit < timeout:
+            try:
+                d = get_json(self.sta_ts_url)
+                self.assertIsInstance(d, dict)
+                break
+            except Exception as e:
+                time.sleep(0.2)
+
 
 
     def test_30_ingest_avg_timeseries_data(self):
@@ -1695,9 +394,14 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries", average="30min")
         cndc_id = sta.get_datastream_id("SBE37", "OBSEA", "CNDC", "timeseries", average="30min")
 
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
+
         # Assert that we get an error with wrong data types
         with self.assertRaises(AssertionError):
             sta.get_datastream_id("SBE37", "OBSEA", "CNDC", "banana")
+
+        self.log.setLevel(lvl)
 
         foi_id = sta.value_from_query('select "ID" from "FEATURES" limit 1;')
 
@@ -1720,9 +424,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             url = self.sta_url + f"/Datastreams({cndc_id})/Observations"
             post_json(url, obs)
 
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
         # We should not able to insert it more than once
         with self.assertRaises(ConnectionError):
             post_json(url, obs)
+
+        self.log.setLevel(lvl)
 
         self.log.info("Assert value is the same as injected via FROST")
         d = get_json(self.sta_url + f"/Datastreams({temp_id})/Observations",
@@ -1785,9 +493,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.dc.sta.check_data_integrity()
 
         self.info("Let's make sure that we have an exception when try to load 2 times the same data")
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
         with self.assertRaises(psycopg2.errors.UniqueViolation):
             bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata")
-
+        self.log.setLevel(lvl)
         self.info("Let's delete some data and try to reload the gaps with missing-data")
         sta.exec_query(f"delete from timeseries where timestamp between '2023-02-01T00:00:00Z' and "
                        f"'2023-02-28T00:00:00Z';", fetch=False)
@@ -1937,10 +647,12 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 }
                 url = self.sta_url + f"/Datastreams({datastream_id})/Observations"
                 post_json(url, obs)
-
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
         # We should not able to insert it more than once
         with self.assertRaises(ConnectionError):
             post_json(url, obs)
+        self.log.setLevel(lvl)
         self.dc.sta.check_data_integrity()
 
     def test_41_ingest_raw_profile_data(self):
@@ -1981,8 +693,12 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         filename = "test41.csv"
         df.to_csv(filename)
+
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
         with self.assertRaises(AssertionError):
             bulk_load_data(filename, self.conf, "AWAC", "banana", "OBSEA", tmp_folder="./tmpdata")
+        self.log.setLevel(lvl)
 
         # Now use the correct data type
         bulk_load_data(filename, self.conf, "AWAC", "profiles", "OBSEA", tmp_folder="./tmpdata")
@@ -2073,7 +789,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             bottom_right = (150 + i * 10, 150 + i * 10)  # Bottom-right corner of the rectangle
             rectangle_color = 'green'  # Color of the rectangle
             draw.rectangle([top_left, bottom_right], fill=rectangle_color)
-            f = f'rectangle_green_{i:02d}.jpg'
+            f = f'rectangle_green_{i:02d}.png'
             image.save(f)  # Save the image to a file
             files.append(f)
 
@@ -2083,7 +799,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", "files")
         for i in range(len(files)):
             file = files[i]
-            path = fileserver.send_file(f"./fileserver/pictures/IPC608", file)
+            path = fileserver.send_file(f"./volumes/fileserver/pictures/IPC608", file)
             foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
             d = {
                 "phenomenonTime": dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -2093,8 +809,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             url = self.sta_url + f"/Datastreams({datastream_id})/Observations"
             post_json(url, d)
 
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
         with self.assertRaises(ConnectionError):
             post_json(url, d)
+        self.log.setLevel(lvl)
 
         # Now, let's download all the data that we injected, see if it's available
         data = get_json(self.sta_url + f"/Datastreams({datastream_id})/Observations")
@@ -2140,11 +859,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             bottom_right = (150 + i * 10, 150 + i * 10)  # Bottom-right corner of the rectangle
             rectangle_color = 'blue'  # Color of the rectangle
             draw.rectangle([top_left, bottom_right], fill=rectangle_color)
-            filename = f"rectangle_blue_{i:03d}.jpg"
+            filename = f"rectangle_blue_{i:03d}.png"
             image.save(filename)  # Save the image to a file
             pictures.append(filename)
             fois.append("OBSEA_Biotop_Blue")
-
 
         # Let's create a csv file for file bulk load
         data = {
@@ -2161,7 +879,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         foi_dict = self.dc.sta.dict_from_query('select "NAME", "ID" from "FEATURES"')
 
         for i, (pic, foi_name) in enumerate(zip(pictures, fois)):
-            url = self.dc.fileserver.send_file("./fileserver/pictures/IPC608", pictures[i])
+            url = self.dc.fileserver.send_file("./volumes/fileserver/pictures/IPC608", pictures[i])
             data["timestamp"].append(dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'))
             data["results"].append(url)
             data["datastream_id"].append(datastream_id)
@@ -2294,8 +1012,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         lvl = self.log.getEffectiveLevel()
         self.log.setLevel(logging.CRITICAL)
 
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
         with self.assertRaises(ValueError):
             sta.timescale.check_data_in_observations(raise_exception=True)
+        self.log.setLevel(lvl)
 
         wrong_datastreams = sta.timescale.check_data_in_observations(raise_exception=False)
         self.log.setLevel(lvl)
@@ -2340,9 +1061,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         sta.timescale.insert_to_timeseries("2020-01-01T00:00:00z", 3.14, 1, profile_id)
         sta.timescale.insert_to_detections("2020-01-01T00:00:00z", 15, timeseries_id)
         sta.timescale.insert_to_profiles("2020-01-01T00:00:00z", 13.01, 3.14, 1, detections_id)
-
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
         with self.assertRaises(ValueError):
             sta.timescale.check_data_in_hypertables()
+        self.log.setLevel(lvl)
 
         wrong_ids = sta.timescale.check_data_in_hypertables(raise_exception=False)
 
@@ -2383,10 +1106,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         for csv_dataset in csv_datasets:
             self.assertTrue(check_url(csv_dataset.url))
 
-        # Force error in format
-        with self.assertRaises(AssertionError):
-            self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-02-01", fmt="potato")
-
         # Export NetCDF
         nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "fileserver", overwrite=True)
         for nc_dataset in nc_datasets:
@@ -2397,8 +1116,23 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         for nc_dataset in nc_datasets:
             self.assertTrue(check_url(nc_dataset.url))
 
+        self.info("Make sure that we have a ValueError when trying to merge units")
+
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
+        # Force error in format
+        with self.assertRaises(AssertionError):
+            self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-02-01", fmt="potato")
+            self.dc.generate_dataset("ctd_different_units", "fileserver", overwrite=True)
+        self.log.setLevel(lvl)
+
+
     def test_72_fileserver_dataset_profiles(self):
         """Creating a dataset"""
+
+        if not self.fileserver_test or not self.profiles_data:
+            self.skipTest("skip")
+
         nc_datasets = self.dc.generate_dataset("awac_full", "fileserver", overwrite=True)
         for nc_dataset in nc_datasets:
             self.assertTrue(check_url(nc_dataset.url))
@@ -2458,7 +1192,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         for nc_dataset in nc_datasets:
             # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
             data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
-            nc_dataset.configure_erddap("conf/datasets.xml", "/datasets/obsea_ctd_full")
+            nc_dataset.configure_erddap("volumes/conf/datasets.xml", "/datasets/obsea_ctd_full")
             nc_dataset.reload_erddap_dataset("erddapData")
             timeout = 10
             self.info(f"Wait {timeout} seconds for ERDDAP to reload...")
@@ -2488,8 +1222,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         nc_dataset = nc_datasets[0]
         # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
         data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
-        nc_dataset.configure_erddap("conf/datasets.xml", data_path)
-        nc_dataset.reload_erddap_dataset("erddapData")
+        nc_dataset.configure_erddap("volumes/conf/datasets.xml", data_path)
+        nc_dataset.reload_erddap_dataset("volumes/erddapData")
 
         # Now get ERDDAP data!
         erddap_dataset = "mydataset.csv"
@@ -2552,11 +1286,10 @@ class VerboseTestResult(unittest.TestResult):
     def startTest(self, test):
         super().startTest(test)
         self._start_time = time.monotonic()
-        self._log_file = f".{test._testMethodName}.log"
+        self._log_file = f"log/.{test._testMethodName}.log"
         self._log_fd = open(self._log_file, 'w')
         test_log_files.append(self._log_file)
         test_name = expand_str(test._testMethodName)
-        print(test_name)
         if redirect_stdout:
             sys.stdout = self._log_fd
             sys.stderr = self._log_fd
@@ -2603,6 +1336,7 @@ class VerboseTestResult(unittest.TestResult):
         rich.print(f"[red]------------- traceback ---------------")
         rich.print(traceback.format_exc())
         rich.print(f"[red]---------------------------------------")
+        input("error catched")
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
@@ -2614,6 +1348,7 @@ class VerboseTestResult(unittest.TestResult):
         rich.print(f"[red]------------- traceback ---------------")
         rich.print(traceback.format_exc())
         rich.print(f"[red]---------------------------------------")
+        input("error catched")
 
     def addSkip(self, test, reason):
         super().addSkip(test, reason)

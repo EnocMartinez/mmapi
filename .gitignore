@@ -2,6 +2,9 @@ secrets.txt
 MetadataPO/*
 secrets*.yaml
 log/
+*/log*
+*/logs/*
+*.png
 MongoData
 *.csv
 tests/conf/.datasets.xml.*
