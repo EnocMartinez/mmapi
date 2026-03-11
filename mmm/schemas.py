@@ -515,9 +515,9 @@ __datasets = {
         "title": {"type": "string"},
         "summary": {"type": "string"},
         "processingLevel": {"type": "string", "enum": valid_dataset_levels},
-        "keywords": {"type": "object", "properties": {
-            # keywork_name : keyword_uri
-        }},
+        "keywords": {
+            "type": "object", "properties": {} # keywork_name : keyword_uri
+        },
         "@stations": {
             "type": "array",
             "minItems": 1,
@@ -541,10 +541,11 @@ __datasets = {
         },
         "constraints": {  # Constraint the datset to certain conditions, such as depth and/or time
             "type": "object",
+            "additionalProperties": False,
             "properties": {
-                "timeRange": {"type": "string"},
+                "timeRange": {"type": "string"},  # Dataset only in this timeRange
                 "@processes": {"type": "string"},  # used to filter data by applied process
-                "fieldOfView": {  # Inteded to select cameras with specific resource withine their field of view
+                "fieldOfView": {  # Intended to select cameras with specific resource within their field of view
                     "type": "object",
                     "properties": {
                         "@programmes": {"type":  "string"}
@@ -555,10 +556,8 @@ __datasets = {
         },
         "dataSourceOptions": {
             "type": "object",
+            "additionalProperties": False,
             "properties": {
-                # "fullData": {"type": "boolean"},
-                # "averagePeriod": {"type": "string"},
-                # "mergeSensors": {"type": "boolean"},
                 "keepFieldOfView": {"type": "boolean"}, # Keep the FOI as field of view in the CSV/NetCDF dataset
                 "jpegCompression": {"type": "boolean"}  # If images are in PNG format, convert them to jpeg to reduce size
             }
@@ -585,7 +584,7 @@ __datasets = {
             "required": ["@projects"]
         }
     },
-    "required": ["title", "summary", "@stations", "@sensors",  "contacts", "dataSourceOptions", "export"]
+    "required": ["title", "keywords", "summary", "@stations", "@sensors",  "contacts", "dataSourceOptions", "export"]
 }
 
 __activities = {
