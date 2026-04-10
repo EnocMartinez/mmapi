@@ -164,9 +164,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         for d in dirs:
             os.rmdir(d)
 
-        log.info("Setting up system start docker compose... (this may take a while)")
-        #run_subprocess("docker compose up -d --build", fail_exit=True)
-        run_subprocess("docker compose up -d", fail_exit=True)
+        log.info("Setting up containers with docker compose up... (this may take a while)")
+        run_subprocess("docker compose up -d --build", fail_exit=True)
+
+        os.makedirs("volumes/fileserver/pictures", exist_ok=True)
 
         # make sure that all servieces are up and running with at least a quick get
         urls = {
