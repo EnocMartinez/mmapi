@@ -1,0 +1,56 @@
+{
+  "#id": "IPC608",
+  "shortName": "IPC608_8B64_165",
+  "serialNumber": "IPC60820221105AAWRK84213991",
+  "description": "IPC608 underwater camera",
+  "longName": "IPC608 underwater camera",
+  "instrumentType": {
+    "definition": "http://vocab.nerc.ac.uk/collection/L05/current/311",
+    "label": "cameras",
+    "id": "cameras"
+  },
+  "manufacturer": {
+    "definition": "LINOVISION",
+    "label": "LINVISION"
+  },
+  "model": {
+    "definition": "",
+    "label": "IPC608UW-10"
+  },
+  "variables": [
+    {
+      "@variables": "FATX",
+      "@units": "dimensionless",
+      "dataType": "detections"
+    },
+    {
+      "@variables": "underwater_photography",
+      "@units": "dimensionless",
+      "dataType": "files"
+    }
+  ],
+  "documentation": {
+    "manual": "https://does.not.exist",
+    "calibrations": []
+  },
+  "pictures": {
+    "reference": "https://does.not.exist"
+  },
+  "processes": [
+    {
+      "@processes": "YOLOv8",
+      "parameters": {}
+    }
+  ],
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "dataManager"
+    },
+    {
+      "@organizations": "upc",
+      "role": "owner"
+    }
+  ],
+  "dataMode": "real-time"
+}

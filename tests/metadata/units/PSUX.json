@@ -1,0 +1,11 @@
+{
+  "#id": "PSUX",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2025-10-14T09:08:23Z",
+  "#modificationDate": "2025-10-14T09:08:23Z",
+  "name": "Practical salinity units",
+  "type": "linear",
+  "symbol": "PSU",
+  "definition": "https://vocab.nerc.ac.uk/collection/P06/current/PSUX"
+}

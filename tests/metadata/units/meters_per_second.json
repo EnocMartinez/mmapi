@@ -1,0 +1,11 @@
+{
+  "#id": "meters_per_second",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:23Z",
+  "#modificationDate": "2024-10-08T14:05:23Z",
+  "name": "meters per second",
+  "type": "linear",
+  "symbol": "m/s",
+  "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UVAA/"
+}

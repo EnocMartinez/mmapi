@@ -1,0 +1,18 @@
+{
+  "#id": "sbe37depl",
+  "name": "SBE37 deployment",
+  "time": "2020-01-01T00:00:00Z",
+  "type": "deployment",
+  "appliedTo": {
+    "@sensors": "SBE37"
+  },
+  "status": "done",
+  "where": {
+    "@stations": "OBSEA"
+  },
+  "description": "Desplegat el SBE37 a l'OBSEA",
+  "#version": 1,
+  "#creationDate": "2026-04-08T11:29:15Z",
+  "#modificationDate": "2026-04-08T11:29:15Z",
+  "#author": "enoc_martinez"
+}

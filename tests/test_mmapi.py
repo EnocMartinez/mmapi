@@ -68,7 +68,7 @@ def get_json(url, params={}):
 
 def post_json(url, data):
     headers = {"Content-Type": "application/json"}
-    r = requests.post(url, headers=headers, data=json.dumps(data))
+    r = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
     if r.status_code > 299:
         raise ConnectionError(f"HTTP error='{r.status_code}' at url={url}")
 
@@ -315,8 +315,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 with open(doc) as f:
                     data = json.load(f)
                 # Insert all documents
-                self.info(f"Inserting collection '{collection}' doc='{data['#id']}'")
-                self.mc.insert_document(collection, data)
+                try:
+                    self.info(f"Inserting collection '{collection}' doc='{data['#id']}'")
+                    self.mc.insert_document(collection, data)
+                except Exception as e:
+                    self.error(f"Error in document {doc}")
+                    raise e
+
 
     def test_05_insert_wrong_metadata(self):
         self.info("Load WRONG documents from 'metadata' folder")
@@ -373,14 +378,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 time.sleep(0.2)
 
 
-
     def test_30_ingest_avg_timeseries_data(self):
         """Ingesting average timeseries data using the API"""
         if not self.timeseries_data:
             self.skipTest("config skips timeseries data")
         # Generate sine wave values
         frequency = 3
-        dates = pd.date_range(start='2024-01-01', end="2024-01-02", freq='30min')
+        dates = pd.date_range(start='2022-01-01T00:00:00', end="2022-01-01T23:59:59", freq='30min')
         tvector = np.arange(0, len(dates)) / len(dates)
         # Create a pandas DataFrame
         df = pd.DataFrame({
@@ -405,7 +409,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         foi_id = sta.value_from_query('select "ID" from "FEATURES" limit 1;')
 
-        for indx, row in df.iterrows():
+        self.info("Injecting 100 first rows via FROST API...")
+        for indx, row in df[:100].iterrows():
             obs = {
                 "phenomenonTime": row["timestamp"],
                 "result": row["TEMP"],
@@ -465,79 +470,86 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         if not self.timeseries_data:
             self.skipTest("config skips timeseries data")
 
-        # Generate sine wave values
-        frequency = 3
-        dates = pd.date_range(start='2023-01-01', end="2023-03-31", freq='100s')
-        tvector = np.arange(0, len(dates)) / len(dates)
-        # Create a pandas DataFrame
-        df = pd.DataFrame({
-            'timestamp': dates,
-            "TEMP": np.sin(2 * np.pi * frequency * tvector),
-            "CNDC": np.cos(2 * np.pi * frequency * tvector)
-        })
-        df["TEMP_QC"] = 1
-        df["CNDC_QC"] = 1
-        df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         sta = self.dc.sta
 
+        def create_fake_data(start: str, end: str, freq: str, variables: list):
+
+            # Generate sine wave values
+            frequency = 3
+            dates = pd.date_range(start=start, end=end, freq=freq)
+            tvector = np.arange(0, len(dates)) / len(dates)
+            # Create a pandas DataFrame
+            df = pd.DataFrame({
+                'timestamp': dates,
+                "TEMP": np.sin(2 * np.pi * frequency * tvector),
+                "CNDC": np.cos(2 * np.pi * frequency * tvector)
+            })
+            df["TEMP_QC"] = 1
+            df["CNDC_QC"] = 1
+            df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            return df
+
+
+        df = create_fake_data("2023-01-01", "2023-03-31", "100s", ["TEMP", "CNDC"])
         filename = "test31.csv"
         df.to_csv(filename, index=False)
-        bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata")
+        bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA", tmp_folder="./temp")
 
         self.info("Now, let's get the data and check that it's the same")
         temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
         # Now, let's download all the data that we injected, see if it's available
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
         results = data["value"]
-        self.assertEqual(len(results), len(tvector))
+        self.assertEqual(len(results), len(df))
         self.dc.sta.check_data_integrity()
 
         self.info("Let's make sure that we have an exception when try to load 2 times the same data")
         lvl = self.log.getEffectiveLevel()
         self.log.setLevel(logging.CRITICAL)
         with self.assertRaises(psycopg2.errors.UniqueViolation):
-            bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA", tmp_folder="./tmpdata")
+            bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA", tmp_folder="./temp")
         self.log.setLevel(lvl)
         self.info("Let's delete some data and try to reload the gaps with missing-data")
+
         sta.exec_query(f"delete from timeseries where timestamp between '2023-02-01T00:00:00Z' and "
                        f"'2023-02-28T00:00:00Z';", fetch=False)
 
         bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA",
-                       tmp_folder="./tmpdata", missing_data="direct")
+                       tmp_folder="./temp", missing_data="direct")
 
         self.info("Now, let's get the data and check that it's the same")
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
 
         # after all this, the number of rows should be the same
-        self.assertEqual(len(tvector), len(data["value"]))
-
+        self.assertEqual(len(df), len(data["value"]))
 
         self.info("Now, try to fill data gaps with hourly data")
-        sta.exec_query(f"delete from timeseries where timestamp between '2023-02-01T00:00:00Z' and "
-                       f"'2023-02-02T00:00:00Z';", fetch=False)
+        sta.exec_query(f"""
+            delete from timeseries where 
+            timestamp between '2023-02-01T00:00:00Z' and '2023-02-02T00:00:00Z'            
+            ;""", fetch=False)
 
-        dates = pd.date_range(start='2023-01-01', end="2023-03-31", freq='30min')  # create a different frequency
-        tvector = np.arange(0, len(dates)) / 1000
-        # Create a pandas DataFrame
-        df = pd.DataFrame({
-            'timestamp': dates,
-            "TEMP": np.sin(2 * np.pi * frequency * tvector),
-            "CNDC": np.cos(2 * np.pi * frequency * tvector)
-        })
-        df["TEMP_QC"] = 1
-        df["CNDC_QC"] = 1
-        df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-
+        # Create data with another frequency, then try to insert it. If missing_data option is used, we should only
+        # inject data in the empty period.
+        df2 = create_fake_data("2023-01-01", "2023-03-31", "30min", ["TEMP", "CNDC"])
         filename = "test31.csv"
-        df.to_csv(filename, index=False)
+        df2.to_csv(filename, index=False)
 
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
         rows_before = len(data["value"])
+
         bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA",
-                       tmp_folder="./tmpdata", missing_data="hourly")
+                       tmp_folder="./temp", missing_data="hourly")
+
+
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
-        self.assertEqual(rows_before + 48, len(data["value"]))  # we should have now 48 more rows
+        self.assertEqual(rows_before + 48, len(data["value"]))  # 24*2 points per hour, we should have 48 more rows
+
+        self.info("Adding SBE16 data with partial overlap")
+
         os.remove(filename)
+
+
 
     def test_32_get_raw_timeseries_data_api(self):
         """get timeseries from the API"""
@@ -560,8 +572,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # Generate sine wave values
         frequency = 1
 
-        tstart = "2022-01-01T00:00:00Z"
-        tend = "2022-03-31T00:00:00Z"
+        tstart = "2022-01-02T00:00:00Z"
+        tend = "2022-04-01T00:00:00Z"
 
         dates = pd.date_range(start=tstart, end=tend, freq='30min')
         self.info(f"Bulk loading a LOT of averaged data ({len(dates)} points)")
@@ -589,7 +601,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         deployments = self.mc.get_sensor_deployments("SBE37", interval=(start, end))
 
         bulk_load_data(filename, self.conf, "SBE37", "timeseries", "OBSEA",
-                       tmp_folder="./tmpdata", average="30min")
+                       tmp_folder="./temp", average="30min")
         os.remove(filename)
         self.info("Now, let's get the data and check that it's the same")
         temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries", average="30min")
@@ -597,7 +609,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations",
                         params={
                             "$top": "10000000",
-                            "$filter": f"phenomenonTime ge 2021-12-31T00:00:01Z and phenomenonTime le 2023-02-05T00:00:01Z"
+                            "$filter": f"resultTime ge {tstart} and resultTime le {tend}"
                         })
 
         results = data["value"]
@@ -697,11 +709,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         lvl = self.log.getEffectiveLevel()
         self.log.setLevel(logging.CRITICAL)
         with self.assertRaises(AssertionError):
-            bulk_load_data(filename, self.conf, "AWAC", "banana", "OBSEA", tmp_folder="./tmpdata")
+            bulk_load_data(filename, self.conf, "AWAC", "banana", "OBSEA", tmp_folder="./temp")
         self.log.setLevel(lvl)
 
         # Now use the correct data type
-        bulk_load_data(filename, self.conf, "AWAC", "profiles", "OBSEA", tmp_folder="./tmpdata")
+        bulk_load_data(filename, self.conf, "AWAC", "profiles", "OBSEA", tmp_folder="./temp")
         os.remove(filename)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -756,7 +768,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         # Now use the correct data type
         bulk_load_data(filename, self.conf, "SBE37", "profiles", "OBSEA",
-                       tmp_folder="./tmpdata")
+                       tmp_folder="./temp")
         os.remove(filename)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -893,7 +905,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         # Now, bulk load it!
         bulk_load_data(datafile, self.conf, "IPC608", "files", "OBSEA",
-                       tmp_folder="./tmpdata")
+                       tmp_folder="./temp")
         os.remove(datafile)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -941,7 +953,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         datafile = "test51-inference.csv"
         df.to_csv(datafile, index=False)
 
-        bulk_load_data(datafile, self.conf, "IPC608", "json", "OBSEA", tmp_folder="./tmpdata")
+        bulk_load_data(datafile, self.conf, "IPC608", "json", "OBSEA", tmp_folder="./temp")
         os.remove(datafile)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -977,7 +989,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         datafile = "test51-detections.csv"
         df.to_csv(datafile)
         bulk_load_data(datafile, self.conf, "IPC608", "detections", "OBSEA",
-                       tmp_folder="./tmpdata")
+                       tmp_folder="./temp")
         os.remove(datafile)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -1205,7 +1217,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     raise ValueError(f"ERDDAP did not load {nc_dataset.erddap_dataset_id}")
                 self.info(f"Waiting for ERDDAP to load {dataset_info_url}...")
                 time.sleep(0.1)
-
 
             # Now get ERDDAP data!
             erddap_dataset = "mydataset.csv"

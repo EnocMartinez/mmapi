@@ -1,0 +1,72 @@
+{
+  "#id": "ctd_different_units",
+  "title": "CTD data with different units, should throw exception",
+  "summary": "CTD data with different units, should throw exception",
+  "keywords": [],
+  "dataMode": "real-time",
+  "@sensors": [
+    "SBE37",
+    "KelvinCTD"
+  ],
+  "@stations": [
+    "OBSEA"
+  ],
+  "dataType": "timeseries",
+  "dataSourceOptions": {
+  },
+  "export": {
+    "erddap": {
+      "resources": [
+        {
+          "id": "OBSEA_CTD_full",
+          "host": "localhost",
+          "path": "./volumes/datasets/obsea_ctd_full",
+          "period": "daily",
+          "format": "netcdf",
+          "dataType": "timeseries"
+        }
+      ]
+    },
+    "fileserver": {
+      "resources": [
+        {
+          "host": "localhost",
+          "path": "./volumes/fileserver/datasets/obsea_ctd_full",
+          "period": "monthly",
+          "format": "netcdf",
+          "id": "netcdf_dataset",
+          "dataType": "timeseries"
+        }
+      ]
+    },
+    "ckan": {
+      "resources": [
+        {
+          "id": "netcdf_dataset",
+          "link": "$fileserver/netcdf_dataset",
+          "title": "CTD data at OBSEA observatory full data",
+          "description": "data from various CTD sensors at OBSEA observatory full data"
+        }
+      ]
+    }
+  },
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "DataCurator"
+    },
+    {
+      "@people": "enoc_martinez",
+      "role": "ProjectLeader"
+    },
+    {
+      "@organizations": "upc",
+      "role": "RightsHolder"
+    }
+  ],
+  "funding": {
+    "@projects": [
+      "Geo-INQUIRE"
+    ]
+  }
+}

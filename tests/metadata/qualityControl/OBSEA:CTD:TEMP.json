@@ -1,0 +1,92 @@
+{
+  "#id": "OBSEA:CTD:TEMP",
+  "instrumentType": "CTD",
+  "qartod": {
+    "gross_range_test": {
+      "fail_span": [
+        8,
+        40
+      ],
+      "suspect_span": [
+        10,
+        32
+      ]
+    },
+    "climatology_test": {
+      "config": [
+        {
+          "vspan": [
+            10.5,
+            16
+          ],
+          "tspan": [
+            1,
+            3
+          ],
+          "period": "month",
+          "zspan": [
+            0,
+            100
+          ]
+        },
+        {
+          "vspan": [
+            12.3,
+            22
+          ],
+          "tspan": [
+            4,
+            6
+          ],
+          "period": "month",
+          "zspan": [
+            0,
+            100
+          ]
+        },
+        {
+          "vspan": [
+            16,
+            28.2
+          ],
+          "tspan": [
+            7,
+            9
+          ],
+          "period": "month",
+          "zspan": [
+            0,
+            100
+          ]
+        },
+        {
+          "vspan": [
+            12.3,
+            24
+          ],
+          "tspan": [
+            10,
+            12
+          ],
+          "period": "month",
+          "zspan": [
+            0,
+            100
+          ]
+        }
+      ]
+    },
+    "flat_line_test": {
+      "tolerance": 1e-05,
+      "suspect_threshold": 100,
+      "fail_threshold": 300
+    },
+    "rate_of_change_test": {
+      "threshold": 0.01
+    },
+    "spike_test": {
+      "suspect_threshold": 1,
+      "fail_threshold": 3
+    }
+  }
+}

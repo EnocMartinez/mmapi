@@ -1,0 +1,69 @@
+{
+  "#id": "obsea_ctd_30min",
+  "title": "CTD data at OBSEA Underwater Observatory 30 min average",
+  "summary": "CTD data measured at OBSEA underwater observatory averaged every 30min",
+  "keywords": [],
+  "dataMode": "real-time",
+  "@sensors": ["SBE37", "SBE16" ],
+  "@stations": ["OBSEA"],
+  "dataSourceOptions": {
+    "sensorPriority": {"@sensors":  ["SBE37", "SBE16"]}
+  },
+  "export": {
+    "erddap": {
+      "resources": [
+        {
+          "id": "OBSEA_CTD_30min",
+          "host": "localhost",
+          "path": "./volumes/datasets",
+          "period": "monthly",
+          "format": "netcdf",
+          "dataType": "timeseries",
+          "averagePeriod": "30min"
+        }
+      ]
+    },
+    "fileserver": {
+      "resources": [
+        {
+          "id": "netcdf_dataset",
+          "host": "localhost",
+          "path": "./volumes/fileserver/datasets/obsea_ctd_30min",
+          "period": "yearly",
+          "format": "netcdf",
+          "dataType": "timeseries",
+          "averagePeriod": "30min"
+        }
+      ]
+    },
+    "ckan": {
+      "resources": [
+        {
+          "id": "ctd",
+          "link": "$fileserver/netcdf_dataset",
+          "title": "CTD data at OBSEA observatory 30 min average",
+          "description": "data from various CTD sensors at OBSEA observatory averaged every 30min"
+        }
+      ]
+    }
+  },
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "DataCurator"
+    },
+    {
+      "@people": "enoc_martinez",
+      "role": "ProjectLeader"
+    },
+    {
+      "@organizations": "upc",
+      "role": "RightsHolder"
+    }
+  ],
+  "funding": {
+    "@projects": [
+      "Geo-INQUIRE"
+    ]
+  }
+}

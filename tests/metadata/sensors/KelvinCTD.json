@@ -1,0 +1,43 @@
+{
+  "#id": "KelvinCTD",
+  "description": "CTD sensor that measures in Kelvin",
+  "shortName": "SBE16",
+  "serialNumber": "16XXXX",
+  "longName": "CTD sensor in Kelvin",
+  "instrumentType": {
+    "id": "CTD",
+    "definition": "http://vocab.nerc.ac.uk/collection/L05/current/130",
+    "label": "CTD"
+  },
+  "manufacturer": {
+    "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0013/",
+    "label": "Sea-Bird Scientific"
+  },
+  "model": {
+    "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL1457/",
+    "label": "SBE 16 MicroCat SMP-CTP"
+  },
+  "variables": [
+    {
+      "@variables": "TEMP",
+      "@units": "degrees_kelvin",
+      "@qualityControl": "OBSEA:CTD:TEMP",
+      "dataType": "timeseries"
+    }
+  ],
+  "documentation": {
+    "manual": "https://does.not.exist",
+    "calibrations": []
+  },
+  "pictures": {
+    "reference": "https://does.not.exist"
+  },
+  "processes": [],
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "dataManager"
+    }
+  ],
+  "dataMode": "real-time"
+}

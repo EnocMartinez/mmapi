@@ -1,0 +1,68 @@
+{
+  "#id": "AWAC",
+  "shortName": "AWAC",
+  "longName": "AWAC-AST 1 MHz ADCP",
+  "description": "AWAC-AST 1 MHz current profiler at OBSEA",
+  "serialNumber": "WAV 5931",
+  "instrumentType": {
+    "label": "Current Profiler",
+    "id": "ADCP",
+    "definition": "http://vocab.nerc.ac.uk/collection/L05/current/115"
+  },
+  "manufacturer": {
+    "label": "Nortek",
+    "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0068/"
+  },
+  "model": {
+    "label": "AWAC-AST 1 MHz",
+    "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL0897/"
+  },
+  "documentation": {
+    "manual": "https://does.not.exist",
+    "calibrations": []
+  },
+  "pictures": {
+    "reference": "https://does.not.exist"
+  },
+  "variables": [
+    {
+      "@variables": "CSPD",
+      "@units": "meters_per_second",
+      "dataType": "profiles"
+    },
+    {
+      "@variables": "CDIR",
+      "@units": "degrees_north",
+      "dataType": "profiles"
+    },
+    {
+      "@variables": "UCUR",
+      "@units": "meters_per_second",
+      "dataType": "profiles"
+    },
+    {
+      "@variables": "VCUR",
+      "@units": "meters_per_second",
+      "dataType": "profiles"
+    }
+  ],
+  "processes": [
+    {
+      "@processes": "average",
+      "parameters": {
+        "period": "30min"
+      }
+    }
+  ],
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "dataManager"
+    },
+    {
+      "@organizations": "upc",
+      "role": "owner"
+    }
+  ],
+  "dataMode": "real-time"
+}

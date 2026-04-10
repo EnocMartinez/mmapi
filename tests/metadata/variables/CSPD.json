@@ -1,0 +1,16 @@
+{
+  "#id": "CSPD",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:30Z",
+  "#modificationDate": "2024-10-08T14:05:30Z",
+  "type": "environmental",
+  "polar": {
+    "angle": "CDIR",
+    "module": "CSPD"
+  },
+  "definition": "https://vocab.nerc.ac.uk/collection/P01/current/LCSAAP01",
+  "description": "Horizontal velocity of the water column (currents)",
+  "cf_compliant": true,
+  "standard_name": "sea_water_speed"
+}

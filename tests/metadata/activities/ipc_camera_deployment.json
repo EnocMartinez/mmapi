@@ -1,0 +1,17 @@
+{
+  "#id": "ipc_camera_deployment",
+  "name": "IPC608 deployment",
+  "time": "2023-01-01T00:00:00Z",
+  "type": "deployment",
+  "appliedTo": {
+    "@sensors": "IPC608"
+  },
+  "status": "done",
+  "where": {
+    "@stations": "OBSEA"
+  },
+  "fieldOfView": {
+    "@programmes": "OBSEA_Biotop"
+  },
+  "description": "Desplegat el IPC608 a l'OBSEA"
+}

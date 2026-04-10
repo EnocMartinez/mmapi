@@ -1,0 +1,57 @@
+{
+  "#id": "biodiversity_datasets",
+  "title": "Biodiversity at OBSEA",
+  "summary": "Fish detections from underwater photography by an AI model",
+  "keywords": [],
+  "dataMode": "real-time",
+  "@sensors": [
+    "IPC608"
+  ],
+  "@stations": [
+    "OBSEA"
+  ],
+  "dataSourceOptions": {
+  },
+  "dataType": "detections",
+  "export": {
+    "fileserver": {
+      "resources": [
+        {
+          "id": "darwin_core_dataset",
+          "host": "localhost",
+          "path": "./volumes/fileserver/datasets/biodiversity_datasets",
+          "period": "yearly",
+          "format": "dwca",
+          "dataType": "json"
+        }
+      ]
+    },
+    "ckan": {
+      "resources": [
+        {
+          "id": "darwin_core_dataset",
+          "link": "$fileserver/darwin_core_dataset",
+          "title": "Fish detections",
+          "description": "Fish detections in CSV format"
+        }
+      ]
+    }
+  },
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "DataCurator"
+    },
+    {
+      "@people": "enoc_martinez",
+      "role": "ProjectLeader"
+    },
+    {
+      "@organizations": "upc",
+      "role": "RightsHolder"
+    }
+  ],
+  "constraints": {
+    "@processes": "YOLOv8"
+  }
+}

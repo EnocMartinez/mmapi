@@ -1,0 +1,12 @@
+{
+  "#id": "underwater_photography",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:31Z",
+  "#modificationDate": "2024-10-08T14:05:31Z",
+  "type": "environmental",
+  "definition": "http://vocab.nerc.ac.uk/collection/P03/current/UWPH/",
+  "description": "underwater photography",
+  "cf_compliant": false,
+  "standard_name": "underwater_photography"
+}

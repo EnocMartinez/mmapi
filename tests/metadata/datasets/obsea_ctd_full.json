@@ -1,0 +1,71 @@
+{
+  "#id": "obsea_ctd_full",
+  "title": "CTD data at OBSEA Underwater Observatory full data",
+  "summary": "CTD data measured at OBSEA underwater observatory full data",
+  "keywords": [],
+  "dataMode": "real-time",
+  "@sensors": [
+    "SBE37",
+    "SBE16"
+  ],
+  "@stations": [
+    "OBSEA"
+  ],
+  "dataType": "timeseries",
+  "dataSourceOptions": {},
+  "export": {
+    "erddap": {
+      "resources": [
+        {
+          "id": "OBSEA_CTD_full",
+          "host": "localhost",
+          "path": "datasets/obsea_ctd_full",
+          "period": "daily",
+          "format": "netcdf",
+          "dataType": "timeseries"
+        }
+      ]
+    },
+    "fileserver": {
+      "resources": [
+        {
+          "host": "localhost",
+          "path": "./volumes/fileserver/datasets/obsea_ctd_full",
+          "period": "monthly",
+          "format": "netcdf",
+          "id": "netcdf_dataset",
+          "dataType": "timeseries"
+        }
+      ]
+    },
+    "ckan": {
+      "resources": [
+        {
+          "id": "netcdf_dataset",
+          "link": "$fileserver/netcdf_dataset",
+          "title": "CTD data at OBSEA observatory full data",
+          "description": "data from various CTD sensors at OBSEA observatory full data"
+        }
+      ]
+    }
+  },
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "DataCurator"
+    },
+    {
+      "@people": "enoc_martinez",
+      "role": "ProjectLeader"
+    },
+    {
+      "@organizations": "upc",
+      "role": "RightsHolder"
+    }
+  ],
+  "funding": {
+    "@projects": [
+      "Geo-INQUIRE"
+    ]
+  }
+}

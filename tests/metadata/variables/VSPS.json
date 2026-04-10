@@ -1,0 +1,12 @@
+{
+  "#id": "VSPS",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:30Z",
+  "#modificationDate": "2024-10-08T14:05:30Z",
+  "type": "environmental",
+  "definition": "https://vocab.nerc.ac.uk/collection/P01/current/GSPRAD01/",
+  "description": "Directional spreading of waves on the water body by acoustic doppler wave array",
+  "cf_compliant": false,
+  "standard_name": "wave directional spreading"
+}

@@ -1,0 +1,22 @@
+{
+  "#id": "OBSEA_deployment_20150519",
+  "name": "OBSEA second deployment",
+  "time": "2015-05-19T00:00:00Z",
+  "type": "deployment",
+  "appliedTo": {
+    "@stations": "OBSEA"
+  },
+  "status": "done",
+  "where": {
+    "position": {
+      "depth": 20.0,
+      "latitude": 41.18212,
+      "longitude": 1.75257
+    }
+  },
+  "description": "Initial OBSEA deployment",
+  "#version": 1,
+  "#creationDate": "2026-04-08T11:29:15Z",
+  "#modificationDate": "2026-04-08T11:29:15Z",
+  "#author": "enoc_martinez"
+}

@@ -1,0 +1,22 @@
+{
+  "#id": "YOLOv8",
+  "name": "YOLOv8l_18sp_2361img",
+  "algorithm": "YOLOv8",
+  "type": "json",
+  "description": "YOLOv8 large trained with 18 species, 2361 images, learning rate 0.000375 and image size 1920 px",
+  "notes": "Variable names correspond to @variables standard_name field",
+  "weights": "https://my.url/file",
+  "trainingConfig": "https://my.url/filex",
+  "trainingData": "",
+  "reference": "https://description.of.my.model",
+  "variableNames": [
+    "Chromis chromis",
+    "Diplodus vulgaris",
+    "Diver"
+  ],
+  "ignore": [
+    "Diver"
+  ],
+  "rename": {},
+  "parameters": {}
+}

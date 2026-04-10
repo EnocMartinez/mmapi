@@ -1,0 +1,11 @@
+{
+  "#id": "siemens_per_metre",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:22Z",
+  "#modificationDate": "2024-10-08T14:05:22Z",
+  "name": "siemens per metre",
+  "type": "linear",
+  "symbol": "S/m",
+  "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/"
+}

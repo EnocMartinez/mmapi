@@ -1,0 +1,11 @@
+{
+  "#id": "radians",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-12-16T15:45:57Z",
+  "#modificationDate": "2024-12-16T15:45:57Z",
+  "name": "radians",
+  "type": "linear",
+  "symbol": "rad",
+  "definition": "https://vocab.nerc.ac.uk/collection/P06/current/URAD"
+}

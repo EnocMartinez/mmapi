@@ -1,0 +1,11 @@
+{
+  "#id": "parts_per_thousand",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-14T14:58:44Z",
+  "#modificationDate": "2024-10-14T14:58:44Z",
+  "name": "parts per thousand",
+  "type": "linear",
+  "symbol": "ppt",
+  "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UPPT"
+}

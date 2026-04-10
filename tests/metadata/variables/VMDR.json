@@ -1,0 +1,12 @@
+{
+  "#id": "VMDR",
+  "#author": "enoc_martinez",
+  "#version": 2,
+  "#creationDate": "2024-10-08T14:05:30Z",
+  "#modificationDate": "2025-05-14T11:24:39Z",
+  "type": "environmental",
+  "definition": "https://vocab.nerc.ac.uk/collection/P01/current/GWMDAD01/",
+  "description": "Direction (from) mean of waves (mean wave direction) on the water body by acoustic doppler wave array",
+  "cf_compliant": false,
+  "standard_name": "wave_mean_direction"
+}

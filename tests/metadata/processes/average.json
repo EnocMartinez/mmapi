@@ -1,0 +1,15 @@
+{
+  "#id": "average",
+  "#author": "enoc_martinez",
+  "#version": 2,
+  "#creationDate": "2024-10-08T14:05:25Z",
+  "#modificationDate": "2025-08-01T08:30:28Z",
+  "name": "Simple average the measure",
+  "type": "average",
+  "reference": "https://en.wikipedia.org/wiki/Average",
+  "parameters": {
+    "ignore": "list of variables to ignore when averaging",
+    "period": "period to average (string)"
+  },
+  "description": "Averages sensor variables over a period of time (period parameter, e.g. 30min, 1day). If a certain variable should not be averaged, add it to the ignore list"
+}

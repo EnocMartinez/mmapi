@@ -1,0 +1,11 @@
+{
+  "#id": "kg_m3",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:23Z",
+  "#modificationDate": "2024-10-08T14:05:23Z",
+  "name": "kilograms per cubic metre",
+  "type": "linear",
+  "symbol": "kg/m3",
+  "definition": "http://vocab.nerc.ac.uk/collection/P06/current/UKMC/"
+}

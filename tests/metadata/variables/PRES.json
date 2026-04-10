@@ -1,0 +1,12 @@
+{
+  "#id": "PRES",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:31Z",
+  "#modificationDate": "2024-10-08T14:05:31Z",
+  "type": "environmental",
+  "definition": "https://vocab.nerc.ac.uk/collection/P01/current/PRESPR01",
+  "description": "pressure that exists in the medium of sea water",
+  "cf_compliant": true,
+  "standard_name": "sea_water_pressure"
+}

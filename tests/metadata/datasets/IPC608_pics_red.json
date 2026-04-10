@@ -1,0 +1,59 @@
+{
+  "#id": "IPC608_pics_red",
+  "title": "Underwater photography at OBSEA (only blue squares)",
+  "summary": "Underwater photography at OBSEA (only blue squares)",
+  "keywords": [],
+  "dataMode": "real-time",
+  "@sensors": [
+    "IPC608"
+  ],
+  "@stations": [
+    "OBSEA"
+  ],
+  "dataSourceOptions": {
+  },
+  "constraints": {
+    "fieldOfView": {
+      "@programmes": "OBSEA_Biotop_Red"
+    }
+  },
+  "dataType": "files",
+  "export": {
+    "fileserver": {
+      "resources": [
+        {
+          "id": "zip_pics",
+          "host": "localhost",
+          "path": "./volumes/fileserver/datasets/IPC608_pics_red",
+          "period": "yearly",
+          "format": "zip",
+          "dataType": "files"
+        }
+      ]
+    },
+    "ckan": {
+      "resources": [
+        {
+          "id": "zip",
+          "link": "$fileserver/zip_pics",
+          "title": "Pictures from camera IPC608 at OBSEA",
+          "description": "pictures taken from a IPC608 camera at OBSEA"
+        }
+      ]
+    }
+  },
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "DataCurator"
+    },
+    {
+      "@people": "enoc_martinez",
+      "role": "ProjectLeader"
+    },
+    {
+      "@organizations": "upc",
+      "role": "RightsHolder"
+    }
+  ]
+}

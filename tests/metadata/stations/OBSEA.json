@@ -1,0 +1,63 @@
+{
+  "#id": "OBSEA",
+  "#author": "enoc_martinez",
+  "#version": 7,
+  "#creationDate": "2024-10-08T14:05:27Z",
+  "#modificationDate": "2026-03-04T10:06:25Z",
+  "oso": {
+    "site": {
+      "label": "OBSEA",
+      "definition": ""
+    },
+    "platform": {
+      "label": "OBSEA seabed station",
+      "definition": ""
+    },
+    "regionalFacility": {
+      "label": "Balearic Sea",
+      "definition": ""
+    }
+  },
+  "contacts": [
+    {
+      "role": "dataManager",
+      "@people": "enoc_martinez"
+    },
+    {
+      "role": "principalInvestigator",
+      "@people": "joaquin_del_rio"
+    },
+    {
+      "role": "operator",
+      "@people": "marc_nogueras"
+    },
+    {
+      "role": "owner",
+      "@organizations": "upc"
+    }
+  ],
+  "defaults": {
+    "@programmes": "OBSEA"
+  },
+  "longName": "OBSEA Expandable Seafloor Observatory (WMO number 6103565)",
+  "pictures": {
+    "other": [
+      "https://files.obsea.es/other/stations/OBSEA/5f9aed9123008.jpeg",
+      "https://files.obsea.es/other/stations/OBSEA/DSCF3838.JPG"
+    ],
+    "reference": "https://files.obsea.es/other/stations/OBSEA/obsea.jpeg",
+    "operational": "https://files.obsea.es/other/stations/OBSEA/DSCF5741.JPG"
+  },
+  "shortName": "OBSEA",
+  "wmo_number": "6103565",
+  "description": "OBSEA is a cabled seafloor observatory deployed at the North-west Mediterranean (Vilanova i la Geltrú, Spain)",
+  "platformType": {
+    "label": "mooring",
+    "definition": "http://vocab.nerc.ac.uk/collection/L06/current/48/"
+  },
+  "documentation": {
+    "other": [
+      "https://www.lavanguardia.com/medio-ambiente/20090714/53744092081/un-laboratorio-submarino-velara-por-la-salud-del-mar-mediterraneo.html"
+    ]
+  }
+}

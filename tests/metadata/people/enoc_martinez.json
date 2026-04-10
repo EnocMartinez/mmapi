@@ -1,0 +1,19 @@
+{
+  "#id": "enoc_martinez",
+  "#author": "enoc_martinez",
+  "#version": 2,
+  "#creationDate": "2024-10-08T14:05:24Z",
+  "#modificationDate": "2026-01-26T10:50:42Z",
+  "name": "Enoc Martinez",
+  "email": "enoc.martinez@upc.edu",
+  "orcid": "0000-0003-1233-7105",
+  "givenName": "Enoc",
+  "familyName": "Martinez",
+  "affiliations": [
+    {
+      "end": "",
+      "start": "2015-06-10",
+      "@organizations": "upc"
+    }
+  ]
+}

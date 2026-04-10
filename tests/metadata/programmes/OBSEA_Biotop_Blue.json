@@ -1,0 +1,36 @@
+{
+  "#id": "OBSEA_Biotop_Blue",
+  "description": "Biotope in front of OBSEA, blue squares",
+  "@projects": [],
+  "geoJsonFeature": {
+    "type": "Feature",
+    "properties": {},
+    "geometry": {
+      "coordinates": [
+        [
+          [
+            1.7515221855838945,
+            41.183341295396275
+          ],
+          [
+            1.7515221855838945,
+            41.181307814018794
+          ],
+          [
+            1.7538603482693702,
+            41.181307814018794
+          ],
+          [
+            1.7538603482693702,
+            41.183341295396275
+          ],
+          [
+            1.7515221855838945,
+            41.183341295396275
+          ]
+        ]
+      ],
+      "type": "Polygon"
+    }
+  }
+}

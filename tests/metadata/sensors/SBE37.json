@@ -1,0 +1,76 @@
+{
+  "#id": "SBE37",
+  "description": "SBE37 CTD sensor at OBSEA",
+  "shortName": "SBE37",
+  "serialNumber": "37SMP47472-5496",
+  "longName": "CTD SBE37 at OBSEA",
+  "instrumentType": {
+    "id": "CTD",
+    "definition": "http://vocab.nerc.ac.uk/collection/L05/current/130",
+    "label": "CTD"
+  },
+  "manufacturer": {
+    "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0013/",
+    "label": "Sea-Bird Scientific"
+  },
+  "model": {
+    "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL1457/",
+    "label": "SBE 37 MicroCat SMP-CTP"
+  },
+  "variables": [
+    {
+      "@variables": "TEMP",
+      "@units": "degrees_celsius",
+      "@qualityControl": "OBSEA:CTD:TEMP",
+      "dataType": "timeseries"
+    },
+    {
+      "@variables": "CNDC",
+      "@units": "siemens_per_metre",
+      "@qualityControl": "OBSEA:CTD:CNDC",
+      "dataType": "timeseries"
+    },
+    {
+      "@variables": "TEMP",
+      "@units": "degrees_celsius",
+      "@qualityControl": "OBSEA:CTD:TEMP",
+      "dataType": "profiles"
+    },
+    {
+      "@variables": "CNDC",
+      "@units": "siemens_per_metre",
+      "@qualityControl": "OBSEA:CTD:CNDC",
+      "dataType": "profiles"
+    }
+  ],
+  "documentation": {
+    "manual": "https://does.not.exist",
+    "calibrations": []
+  },
+  "processes": [
+    {
+      "@processes": "average",
+      "parameters": {
+        "period": "30min",
+        "ignore": []
+      }
+    },
+    {
+      "@processes": "average",
+      "parameters": {
+        "period": "1day",
+        "ignore": []
+      }
+    }
+  ],
+  "pictures": {
+    "reference": "https://does.not.exist"
+  },
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "dataManager"
+    }
+  ],
+  "dataMode": "real-time"
+}

@@ -1,0 +1,11 @@
+{
+  "#id": "degrees",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-12-16T16:01:02Z",
+  "#modificationDate": "2024-12-16T16:01:02Z",
+  "name": "degrees",
+  "type": "linear",
+  "symbol": "deg",
+  "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UAAA/"
+}

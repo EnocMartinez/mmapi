@@ -1,0 +1,13 @@
+{
+  "#id": "dentex_dentex",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:31Z",
+  "#modificationDate": "2024-10-08T14:05:31Z",
+  "type": "biodiversity",
+  "worms_id": "273962",
+  "definition": "https://www.marinespecies.org/aphia.php?p=taxdetails&id=273962",
+  "description": "Abundance of Dentex dentex in sea water",
+  "cf_compliant": false,
+  "standard_name": "Dentex dentex"
+}

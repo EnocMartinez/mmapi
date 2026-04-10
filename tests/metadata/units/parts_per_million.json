@@ -1,0 +1,11 @@
+{
+  "#id": "parts_per_million",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:22Z",
+  "#modificationDate": "2024-10-08T14:05:22Z",
+  "name": "parts per million",
+  "type": "linear",
+  "symbol": "ppm",
+  "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UPPM"
+}

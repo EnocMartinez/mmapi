@@ -1,0 +1,24 @@
+{
+  "#id": "Geo-INQUIRE",
+  "#author": "enoc_martinez",
+  "#version": 2,
+  "#creationDate": "2024-10-08T14:05:29Z",
+  "#modificationDate": "2026-02-02T09:05:49Z",
+  "type": "european",
+  "title": "Geosphere INfrastructures for QUestions into Integrated REsearch",
+  "active": true,
+  "acronym": "Geo-INQUIRE",
+  "dateEnd": "2026-09-30",
+  "funding": {
+    "call": "HORIZON-INFRA-2021-SERV-01",
+    "grantId": "101058518",
+    "coordinator": "GFZ",
+    "@organizations": "ec",
+    "partnershipType": "thirdParty"
+  },
+  "logoUrl": "https://files.obsea.es/other/logos/projects/geo-inquire.jpg",
+  "dateStart": "2022-10-01",
+  "ourBudget": 43750.0,
+  "description": "Horizon Europe project enhancing access to key geosphere data, products, and services to monitor and model dynamic Earth processes with improved spatiotemporal detail by bridging land–sea–atmosphere domains and advanced digital methods.",
+  "totalBudget": 13923475.77
+}

@@ -1,0 +1,12 @@
+{
+  "#id": "AIN2",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:29Z",
+  "#modificationDate": "2024-10-08T14:05:29Z",
+  "type": "technical",
+  "definition": "analog input 2 from AWAC instrument",
+  "description": "analog input 2",
+  "cf_compliant": false,
+  "standard_name": "analog input 2"
+}

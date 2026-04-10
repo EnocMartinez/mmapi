@@ -1,0 +1,40 @@
+{
+  "#id": "OBSEA",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:27Z",
+  "#modificationDate": "2024-10-08T14:05:27Z",
+  "@projects": [],
+  "description": "Long term monitoring of the OBSEA underwater observatory area",
+  "geoJsonFeature": {
+    "type": "Feature",
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [
+            1.7515221855838945,
+            41.183341295396275
+          ],
+          [
+            1.7515221855838945,
+            41.181307814018794
+          ],
+          [
+            1.7538603482693702,
+            41.181307814018794
+          ],
+          [
+            1.7538603482693702,
+            41.183341295396275
+          ],
+          [
+            1.7515221855838945,
+            41.183341295396275
+          ]
+        ]
+      ]
+    },
+    "properties": {}
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "#id": "degrees_kelvin",
+  "name": "degrees Kelvin",
+  "symbol": "degK",
+  "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UPAA/",
+  "type": "linear",
+  "#version": 1,
+  "#creationDate": "2026-03-10T11:18:40Z",
+  "#modificationDate": "2026-03-10T11:18:40Z",
+  "#author": "enoc_martinez"
+}

@@ -1,0 +1,11 @@
+{
+  "#id": "db_re_1_upa",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:22Z",
+  "#modificationDate": "2024-10-08T14:05:22Z",
+  "name": "dB re 1 uPa",
+  "type": "logarithmic",
+  "symbol": "db",
+  "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UDBL/"
+}

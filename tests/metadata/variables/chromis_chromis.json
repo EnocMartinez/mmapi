@@ -1,0 +1,13 @@
+{
+  "#id": "chromis_chromis",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:31Z",
+  "#modificationDate": "2024-10-08T14:05:31Z",
+  "type": "biodiversity",
+  "worms_id": "127000",
+  "definition": "https://www.marinespecies.org/aphia.php?p=taxdetails&id=127000",
+  "description": "Abundance of Chromis chromis in sea water",
+  "cf_compliant": false,
+  "standard_name": "Chromis chromis"
+}

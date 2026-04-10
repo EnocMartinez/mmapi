@@ -1,0 +1,12 @@
+{
+  "#id": "VCUR",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:29Z",
+  "#modificationDate": "2024-10-08T14:05:29Z",
+  "type": "environmental",
+  "definition": "https://vocab.nerc.ac.uk/collection/P01/current/LCNSZZ01/",
+  "description": "northward velocity of water current in the water body",
+  "cf_compliant": true,
+  "standard_name": "northward_sea_water_velocity"
+}

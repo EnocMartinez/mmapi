@@ -1,0 +1,14 @@
+{
+  "#id": "upc",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:31Z",
+  "#modificationDate": "2024-10-08T14:05:31Z",
+  "ROR": "https://ror.org/03mb6wj31",
+  "EDMO": "https://edmo.seadatanet.org/report/2150",
+  "public": true,
+  "acronym": "UPC",
+  "logoUrl": "https://files.obsea.es/other/logos/organizations/upc.png",
+  "fullName": "Universitat Politècnica de Catalunya",
+  "alternativeNames": []
+}

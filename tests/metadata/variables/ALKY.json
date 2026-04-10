@@ -1,0 +1,12 @@
+{
+  "#id": "ALKY",
+  "#author": "enoc_martinez",
+  "#version": 1,
+  "#creationDate": "2024-10-08T14:05:30Z",
+  "#modificationDate": "2024-10-08T14:05:30Z",
+  "type": "environmental",
+  "definition": "https://vocab.nerc.ac.uk/collection/P01/current/PHXXZZXX",
+  "description": "Minus the log of the hydrogen ion concentration (moles per litre) in the water column.",
+  "cf_compliant": true,
+  "standard_name": "sea_water_ph_reported_on_total_scale"
+}

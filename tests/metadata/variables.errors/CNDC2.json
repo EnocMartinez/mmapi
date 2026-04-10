@@ -1,0 +1,8 @@
+{
+  "#id": "CNDC2",
+  "standard_nam2e": "sea_water_electrical_conductivity",
+  "descriptiodn": "sea water electrical conductivity",
+  "definition": "https://vocab.nerc.ac.uk/collection/P01/current/CNDCST01/",
+  "cf_compdliant": true,
+  "type": "environmental"
+}

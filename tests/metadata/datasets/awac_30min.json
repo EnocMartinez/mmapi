@@ -1,0 +1,72 @@
+{
+  "#id": "awac_30min",
+  "title": "AWAC current profiler data 30min",
+  "summary": "AWAC current profiler data",
+  "keywords": [],
+  "dataMode": "real-time",
+  "@sensors": [
+    "AWAC"
+  ],
+  "@stations": [
+    "OBSEA"
+  ],
+  "dataType": "profiles",
+  "dataSourceOptions": {
+  },
+  "export": {
+    "erddap": {
+      "resources": [
+        {
+          "id": "awac_dataset",
+          "host": "localhost",
+          "path": "./volumes/datasets",
+          "period": "monthly",
+          "format": "netcdf",
+          "dataType": "profiles",
+          "averagePeriod": "30min"
+        }
+      ]
+    },
+    "fileserver": {
+      "resources": [
+        {
+          "id": "netcdf_dataset",
+          "host": "localhost",
+          "path": "./volumes/fileserver/datasets/awac_dataset_full",
+          "period": "yearly",
+          "format": "netcdf",
+          "dataType": "profiles"
+        }
+      ]
+    },
+    "ckan": {
+      "resources": [
+        {
+          "id": "ctd",
+          "link": "$fileserver/netcdf_dataset",
+          "title": "AWAC full data dataset",
+          "description": "AWAC full data dataset"
+        }
+      ]
+    }
+  },
+  "contacts": [
+    {
+      "@people": "enoc_martinez",
+      "role": "DataCurator"
+    },
+    {
+      "@people": "enoc_martinez",
+      "role": "ProjectLeader"
+    },
+    {
+      "@organizations": "upc",
+      "role": "RightsHolder"
+    }
+  ],
+  "funding": {
+    "@projects": [
+      "Geo-INQUIRE"
+    ]
+  }
+}

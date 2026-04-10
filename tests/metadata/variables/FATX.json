@@ -1,0 +1,12 @@
+{
+  "#id": "FATX",
+  "#author": "enoc_martinez",
+  "#version": 2,
+  "#creationDate": "2024-10-08T14:05:31Z",
+  "#modificationDate": "2026-03-06T07:42:15Z",
+  "type": "biodiversity",
+  "definition": "https://vocab.nerc.ac.uk/collection/P02/current/FATX/",
+  "description": "Fish abundance in water bodies",
+  "cf_compliant": false,
+  "standard_name": "fish_abundance"
+}

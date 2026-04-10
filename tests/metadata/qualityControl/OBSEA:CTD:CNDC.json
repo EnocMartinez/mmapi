@@ -1,0 +1,28 @@
+{
+  "#id": "OBSEA:CTD:CNDC",
+  "instrumentType": "CTD",
+  "qartod": {
+    "gross_range_test": {
+      "fail_span": [
+        1,
+        6.5
+      ],
+      "suspect_span": [
+        2,
+        6
+      ]
+    },
+    "flat_line_test": {
+      "tolerance": 1e-06,
+      "suspect_threshold": 100,
+      "fail_threshold": 300
+    },
+    "spike_test": {
+      "suspect_threshold": 0.05,
+      "fail_threshold": 0.2
+    },
+    "rate_of_change_test": {
+      "threshold": 0.001
+    }
+  }
+}
