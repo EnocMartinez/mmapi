@@ -35,7 +35,6 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         """
         PgDatabaseConnector.__init__(self, host, port, db_name, db_user, db_password, logger)
         self.host = host
-        os.makedirs("tmpdata", exist_ok=True)
         LoggerSuperclass.__init__(self, logger, "STA DB")
         self.info("Initialize database connector...")
         tinit = time.time()
@@ -1123,6 +1122,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             """
 
         times = self.dataframe_from_query(query)
+
         if "PHENOMENON_TIME_START" in times.columns:
             times = times.rename(columns={"PHENOMENON_TIME_START": "timestamp"})
         times["timestamp"] = pd.to_datetime(times["timestamp"])

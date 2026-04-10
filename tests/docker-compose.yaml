@@ -46,7 +46,7 @@
       ports:
         - 5432:5432
       volumes:
-        - ./tmpdata:/tmp/sta_db_copy/data
+        - ./temp:/tmp/sta_db_copy/data
       healthcheck:
         test: [ "CMD-SHELL", "pg_isready", "-d", "sensorthings" ]
         interval: 30s

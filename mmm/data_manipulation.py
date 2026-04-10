@@ -926,3 +926,24 @@ def df_netcdf_normalization(df):
             df[col] = df[col].astype(str).str.replace('-', '_', regex=False)
 
     return df
+
+def find_first(data, target="dataType"):
+    """
+    Finds the first element in the structure
+    :param data:
+    :param target:
+    :return:
+    """
+    if isinstance(data, dict):
+        if target in data:
+            return data[target]
+        for value in data.values():
+            result = find_first(value, target)
+            if result is not None:
+                return result
+    elif isinstance(data, list):
+        for item in data:
+            result = find_first(item, target)
+            if result is not None:
+                return result
+    return None

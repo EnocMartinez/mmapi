@@ -515,9 +515,17 @@ __datasets = {
         "title": {"type": "string"},
         "summary": {"type": "string"},
         "processingLevel": {"type": "string", "enum": valid_dataset_levels},
-        "keywords": {
-            "type": "object", "properties": {} # keywork_name : keyword_uri
-        },
+        # "keywords": {
+        #     "type": "array",
+        #     "items": {
+        #         "type": "object",
+        #         "properties": {
+        #             "label": {"type": "name"},
+        #             "uri": {"type": "name"}
+        #         },
+        #         "required": ["label", "label"]
+        #     }
+        # },
         "@stations": {
             "type": "array",
             "minItems": 1,
@@ -559,7 +567,12 @@ __datasets = {
             "additionalProperties": False,
             "properties": {
                 "keepFieldOfView": {"type": "boolean"}, # Keep the FOI as field of view in the CSV/NetCDF dataset
-                "jpegCompression": {"type": "boolean"}  # If images are in PNG format, convert them to jpeg to reduce size
+                "jpegCompression": {"type": "boolean"},  # If images are in PNG format, convert them to jpeg to reduce size
+                "sensorPriority": { # In order to avoid duplicated measures of different sensors at the same time, define the priority of the sensor data, first sensors have higher priority
+                    "type": "object",
+                    "properties": { "@sensors": { "type": "array", "minItems": 1, "items": { "type": "string" }}},
+                    "required": ["@sensors"]
+                }
             }
         },
         "dataMode": {"type": "string", "enum": ["real-time", "delayed", "mixed", "provisional"]},
@@ -584,7 +597,7 @@ __datasets = {
             "required": ["@projects"]
         }
     },
-    "required": ["title", "keywords", "summary", "@stations", "@sensors",  "contacts", "dataSourceOptions", "export"]
+    "required": ["title", "keywords", "summary", "@stations", "@sensors",  "contacts", "dataSourceOptions", "export", "dataMode"]
 }
 
 __activities = {

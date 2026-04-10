@@ -362,7 +362,7 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                         }
 
                     ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
-                    dc.info("Registering Datastream {ds_name}")
+                    dc.info(f"Registering Datastream {ds_name}")
                     ds.register(url, update=update, verbose=verbose)
 
                 elif var["dataType"] == "files":

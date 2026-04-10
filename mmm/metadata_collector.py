@@ -149,7 +149,8 @@ class MetadataCollector(LoggerSuperclass):
         try:
             self.info(f"Connecting to database '{db_name}'...")
             self.db = PgDatabaseConnector(host, port, db_name, db_user, db_password, log)
-            self.db_hist = PgDatabaseConnector(host, port, self.db_hist_name, db_user, db_password, log, autocommit=True)
+            self.db_hist = PgDatabaseConnector(host, port, self.db_hist_name, db_user, db_password, log,
+                                               autocommit=True)
             self.info("Database ok")
         except psycopg2.OperationalError:
             self.info(f"Database not initialized! creating '{db_name}'")
@@ -171,7 +172,6 @@ class MetadataCollector(LoggerSuperclass):
         self.__cache_timeout_s = 300  # 5 minutes
         self.__cache = {}
         self.used_time = 0
-
 
     def __init_database(self):
         """
@@ -253,7 +253,6 @@ class MetadataCollector(LoggerSuperclass):
                 query = (f"alter table {collection} add constraint {collection}_id_version_unique unique"
                          f" (doc_id, doc_version);")
                 self.db_hist.exec_query(query, fetch=False)
-
 
     def __add_to_cache(self, collection, doc):
         """
@@ -398,7 +397,7 @@ class MetadataCollector(LoggerSuperclass):
         q = (f"select doc_version from {collection.lower()} where doc_id = '{document_id}' order by doc_version desc"
              f" limit 1;")
         versions = self.db_hist.list_from_query(q)
-        if len(versions) > 0 :
+        if len(versions) > 0:
             self.debug(f"historical version {versions[0]}")
             version = versions[0] + 1
         else:
@@ -418,7 +417,7 @@ class MetadataCollector(LoggerSuperclass):
             INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc)
             VALUES (%s, %s, %s, %s, %s, %s)
         """)
-        values = (document_id, author, document["#version"],  document["#creationDate"], document["#modificationDate"],
+        values = (document_id, author, document["#version"], document["#creationDate"], document["#modificationDate"],
                   json.dumps(contents))
 
         self.db.exec_query((insert_query, values), fetch=False)
@@ -468,7 +467,8 @@ class MetadataCollector(LoggerSuperclass):
                                       history=True)
 
         if len(docs) > 1:
-            self.error(f"Expected only one document with id={document_id}, but database returned {len(docs)}!", exception=True)
+            self.error(f"Expected only one document with id={document_id}, but database returned {len(docs)}!",
+                       exception=True)
         elif len(docs) == 0:
             self.error(f"Document '{document_id}' not found in collection '{collection}'", exception=LookupError)
         return docs[0]
@@ -678,7 +678,6 @@ class MetadataCollector(LoggerSuperclass):
         """
         raise ValueError("Unimplemented")
 
-
     def get_contact_by_role(self, doc: dict, role: str) -> Tuple[dict, str]:
         """
         Loops through the contacts section in a document and returns the id and the collection type (organization or
@@ -790,6 +789,7 @@ class MetadataCollector(LoggerSuperclass):
         Ensure all relations in the database. For every document validate it against the generic schema (metadata
         schema), collection schema and scan the document for broken relation (@-fields).
         """
+        init = time.time()
         if collections is None:
             collections = []
         assert (type(collections) is list)
@@ -799,27 +799,14 @@ class MetadataCollector(LoggerSuperclass):
         if not collections:
             collections = self.collection_names
 
+        arguments = []
         for col in collections:
-            schema = {}
-            if col in self.schemas.keys():
-                schema = self.schemas[col]
-            else:
-                self.warning(f"Missing schema for collection {col}!")
-
             docs = self.get_documents(col)
             for doc in docs:
-                # Validate against metadata schema and collection-specific schema
-                errors = validate_schema(doc, self.metadata_schema, errors)
-                if schema:
-                    errors = validate_schema(doc, schema, errors, verbose=True)
-                # Check relation for author
-                errors = self.__check_link(col, doc["#id"], "people", doc["#author"], errors)
-                # Scan the rest of the document and check its relations
-                errors = self.__check_dict(col, doc["#id"], doc, errors)
-
-                # Check if there are any warnings
-                warnings = self.__warning(col, doc, warnings)
-
+                arguments.append([doc, col])
+                doc_errors, doc_warnings = self.validate_doc(doc, col)
+                warnings += doc_warnings
+                errors += doc_errors
 
         if warnings:
             self.info("Warning report")
@@ -832,6 +819,22 @@ class MetadataCollector(LoggerSuperclass):
             self.error(f"[red]Got {len(errors)} errors!")
         else:
             self.info(f"  =) =) Congratulations! You have a healthy database (= (=\n")
+            self.debug(f"healthcheck took {time.time() - init:.02f} seconds")
+
+    def validate_doc(self, doc, collection):
+        errors = []  # list of document errors
+        try:
+            schema = mmm_schemas[collection]
+        except KeyError:
+            schema = {}
+        if schema:
+            errors = validate_schema(doc, schema, [], verbose=True)
+
+        errors = self.__check_link(collection, doc["#id"], "people", doc["#author"], errors)
+        # Scan the rest of the document and check its relations
+        errors = self.__check_dict(collection, doc["#id"], doc, errors)
+        warnings = self.__warning(collection, doc, [])
+        return errors, warnings
 
     def get_station_position(self, station_name: str, timestamp: pd.Timestamp = None) -> Tuple[float, float, float]:
         """
@@ -881,7 +884,8 @@ class MetadataCollector(LoggerSuperclass):
                 self.debug(f'Found deployement lat={row["latitude"]} lon={row["longitude"]} depth={row["depth"]}')
                 return float(row["latitude"]), float(row["longitude"]), float(row["depth"])
 
-        raise LookupError(f"Deployment for station={station_name} before {timestamp} not found, only found={data['time']}")
+        raise LookupError(
+            f"Deployment for station={station_name} before {timestamp} not found, only found={data['time']}")
 
     def drop_all(self):
         """
@@ -923,7 +927,6 @@ class MetadataCollector(LoggerSuperclass):
             active = False
         return doc["where"]["@stations"], deployment_t, active
 
-
     def get_last_sensor_recovery(self, sensor_id) -> pd.Timestamp:
         """
         Returns the timestamp of the last recovery (or loss)
@@ -940,7 +943,6 @@ class MetadataCollector(LoggerSuperclass):
             """, debug=False
         )
         return pd.Timestamp(doc["time"])
-
 
     def __get_deployments(self, element_type, identifier) -> list:
         # Get all activities and involving this station
@@ -972,7 +974,6 @@ class MetadataCollector(LoggerSuperclass):
 
             deployments.append(deployment)
 
-
         deployments = sorted(deployments, key=lambda x: x["start"])
 
         for i in range(len(deployments)):
@@ -997,8 +998,7 @@ class MetadataCollector(LoggerSuperclass):
                 deployment["end"] = min(deployment_end_candidates)  # The first candidate is the valid recovery time
         return deployments
 
-
-    def get_sensor_deployments(self, sensor: dict|str, interval=()) -> list:
+    def get_sensor_deployments(self, sensor: dict | str, interval=()) -> list:
         """
         Returns a list of dicts with the info of each deployment registered in the sensor.
             [
@@ -1042,12 +1042,12 @@ class MetadataCollector(LoggerSuperclass):
                     if isinstance(dep["end"], pd.Timestamp):
                         if dep["end"] >= valid_end:
                             deployments_inside_interval.append(dep)
-                    elif isinstance(dep["end"] , type(None)):
+                    elif isinstance(dep["end"], type(None)):
                         deployments_inside_interval.append(dep)
             deployments = deployments_inside_interval
         return deployments
 
-    def get_sensor_deployment(self, sensor: dict|str, timestamp: pd.Timestamp) -> Tuple[float, float, float, dict]:
+    def get_sensor_deployment(self, sensor: dict | str, timestamp: pd.Timestamp) -> Tuple[float, float, float, dict]:
         """Gets the sensor deployment at a certain moment in time
 
         return latitude, longitude, depth and a dict with options like "fieldOfView"
@@ -1059,8 +1059,7 @@ class MetadataCollector(LoggerSuperclass):
         d = deployments[0]["coordinates"]
         return d["latitude"], d["longitude"], d["depth"]
 
-
-    def get_station_deployments(self, station: dict|str) -> list:
+    def get_station_deployments(self, station: dict | str) -> list:
         """
         Returns a list of dicts with the info of each deployment registered in the station:
             [
@@ -1107,7 +1106,7 @@ class MetadataCollector(LoggerSuperclass):
 
         return deployments
 
-    def get_station_coordinates(self, station: dict|str, timestamp=None) -> Tuple[float, float, float]:
+    def get_station_coordinates(self, station: dict | str, timestamp=None) -> Tuple[float, float, float]:
         """
         Looks for the latest coordinates of a station based on its deployment history. Station may be station_id (str) or
         the station document (dict)
@@ -1147,7 +1146,6 @@ class MetadataCollector(LoggerSuperclass):
         station_id = station["#id"]
         raise LookupError(f"Station {station_id} coordinates not found! (timestamp={timestamp}")
 
-
     def get_station_history(self, name: str) -> list:
         """
         Looks for all activities with the
@@ -1179,7 +1177,6 @@ class MetadataCollector(LoggerSuperclass):
         assert_type(path, str)
         assert_type(host, str)
 
-
         now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
         self.debug(f"Registering dataset {dataset_id} {resource_id} {service}{fmt} {data_from} {data_to}")
 
@@ -1208,8 +1205,9 @@ class MetadataCollector(LoggerSuperclass):
             ;"""
             self.db.exec_query(query, fetch=False)
 
-    def dataset_resource_exists(self,dataset_id: str, resource_id: str, service: str, fmt: str, data_from: pd.Timestamp,
-                         data_to: pd.Timestamp,) -> bool:
+    def dataset_resource_exists(self, dataset_id: str, resource_id: str, service: str, fmt: str,
+                                data_from: pd.Timestamp,
+                                data_to: pd.Timestamp, ) -> bool:
         query = f"""
             SELECT EXISTS(
                 SELECT 1 FROM {self.dataset_registry_table} 
@@ -1232,14 +1230,17 @@ class MetadataCollector(LoggerSuperclass):
             for doc in self.get_documents("variables"):
                 if "worms_id" in doc.keys():
                     self.__taxa_aphia_dict[doc["standard_name"]] = doc["worms_id"]
-        
+
         return self.__taxa_aphia_dict
+
 
 def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
     return mc.get_station_deployments(station)
 
+
 def get_sensor_deployments(mc: MetadataCollector, sensor_id: str) -> list:
     return mc.get_sensor_deployments(sensor_id)
+
 
 def get_sensor_latest_deployment(mc: MetadataCollector, sensor_id: str) -> list:
     """
@@ -1248,8 +1249,10 @@ def get_sensor_latest_deployment(mc: MetadataCollector, sensor_id: str) -> list:
     deployments = get_sensor_deployments(mc, sensor_id)
     return deployments[-1][0]
 
+
 def get_station_coordinates(mc: MetadataCollector, station: any, timestamp=None) -> (float, float, float):
     return mc.get_station_coordinates(station, timestamp=timestamp)
+
 
 def get_station_history(mc: MetadataCollector, name: str) -> list:
     return mc.get_station_history(name)

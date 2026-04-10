@@ -199,6 +199,9 @@ if __name__ == "__main__":
     folder = os.path.join(args.folder, db_name)
     folder_hist = os.path.join(args.folder, db_name_hist)
 
+    if not os.path.exists(folder_hist):
+        os.makedirs(folder_hist)
+
     collections = mc.collection_names
     if args.collections:
         collections = args.collections

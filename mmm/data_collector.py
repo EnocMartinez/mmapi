@@ -12,7 +12,7 @@ import datetime
 import logging
 import socket
 from typing import Tuple, List
-
+import uuid
 import yaml
 import time
 import emso_metadata_harmonizer.metadata
@@ -28,7 +28,7 @@ from .ckan import CkanClient
 from .common import check_url, run_over_ssh, LoggerSuperclass, assert_types, GRN, RST, assert_type, populate_dict
 from .data_sources.postgresql import sql_list
 from .data_manipulation import merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals, pivot_dataframe, \
-    df_netcdf_normalization, floor_timestamp, ceil_timestamp, ensure_timestamp
+    df_netcdf_normalization, floor_timestamp, ceil_timestamp, ensure_timestamp, find_first
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
 from mmm.dataset import DatasetObject
@@ -209,6 +209,29 @@ class DataCollector(LoggerSuperclass):
         self.debug(f"database-defined time coverage {db_start} to {db_end} (took {time.time() - init:.03f} secs)")
         return db_start, db_end
 
+    def add_local_dataset(self, conf: dict, time_start: pd.Timestamp, time_end: pd.Timestamp):
+        if not time_start or not time_end:
+            self.error("Local datasets MUST have a time range!", exception=True)
+
+        data_type = find_first(conf, target="dataType")
+        if not data_type:
+            self.error("Could not find data type!", exception=True)
+
+        resource = {
+            "id": "local_files",
+            "period": "none",
+            "format": "csv",
+            "host": "localhost",
+            "path": "./",
+            "dataType": "files"
+        }
+        rich.print(conf["export"])
+        conf["export"]["local"] = {"resources": [resource]}
+        self.info("Creating local dataset")
+        return conf
+
+
+
     def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str = "",
                          time_end: pd.Timestamp|str = "", fmt: str = "", overwrite=False, erddap_config=False,
                          secrets: dict=None, resources: dict = None, local=False) -> List[DatasetObject,]:
@@ -228,7 +251,7 @@ class DataCollector(LoggerSuperclass):
         """
         assert_type(service_name, str)
         assert_types(dataset, [dict, str])
-        assert service_name in valid_dataset_services, f"Service '{service_name}' not recognized!"
+        assert service_name in valid_dataset_services + ["local"], f"Service '{service_name}' not recognized!"
 
         # Assert that time_start and time_end are correct and with time zone
         time_start = ensure_timestamp(time_start)
@@ -241,8 +264,10 @@ class DataCollector(LoggerSuperclass):
         dataset_id = conf["#id"]
 
         self.info(f"=====> Creating dataset {GRN}{dataset_id} {RST} <=====")
-
-        assert service_name in conf["export"].keys(), f"Dataset {dataset_id} doesn't have export configuration for service '{service_name}'"
+        if service_name == "local":  # Force local dataset!
+            conf = self.add_local_dataset(conf, time_start, time_end)
+        else:
+            assert service_name in conf["export"].keys(), f"Dataset {dataset_id} doesn't have export service '{service_name}'"
 
         if service_name == "ckan":
             # CKAN only points to the FileServer, no need to create a dataset here
@@ -396,7 +421,7 @@ class DataCollector(LoggerSuperclass):
 
         if "@variables" in conf.keys():
             self.info(f"Filtering variables, keeping: {conf['@variables']}")
-            keep_vars = ["time", "depth", "latitude", "longitude", "sensor_id", "platform_id", "foi"] + conf["@variables"]
+            keep_vars = ["time", "depth", "latitude", "longitude", "sensor_id", "platform_id", "field_of_view"] + conf["@variables"]
             for col in df.columns:
                 if col.endswith("_QC"):
                     continue
@@ -407,7 +432,7 @@ class DataCollector(LoggerSuperclass):
                         del df[col + "_QC"]
 
 
-        return df
+        return df.sort_index(ascending=True)
 
     def dataframe_from_sta_detections(self, conf: dict, resource: dict,station_ids: list, sensor_ids, time_start: pd.Timestamp,
                                       time_end: pd.Timestamp):
@@ -638,10 +663,8 @@ class DataCollector(LoggerSuperclass):
             avg_period=""
 
         df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
-        # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi        df = df[["timestamp", "depth", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
+        # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
         df = df[["timestamp", "depth", "latitude", "longitude", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
-        print(df["depth"].unique())
-        print(df)
         df = pivot_dataframe(df, pivot_cols=["value", "qc_flag"])
         return df.set_index("timestamp")
 
@@ -670,7 +693,7 @@ class DataCollector(LoggerSuperclass):
         df = pivot_dataframe(df, pivot_cols=["value"])
 
         if keep_foi:
-            df = df.rename(columns={"foi": "fieldOfView"})
+            df = df.rename(columns={"foi": "field_of_view"})
         else:
             del df["foi"]
         return df.set_index("timestamp")
@@ -1030,13 +1053,13 @@ class DataCollector(LoggerSuperclass):
 
         for sensor in sensors:
             sensor_id = sensor["#id"].replace("-", "_")
-            self.warning(f"Assuming sensor '{sensor_id}' is mounted_on_seafloor_structure")
+            self.debug(f"Assuming sensor '{sensor_id}' is mounted_on_seafloor_structure")
 
             if sensor["instrumentType"]["label"] == "cameras":
                 orientation = "horizontal"
             else:
                 orientation = "upward"
-            self.warning(f"Assuming sensor '{sensor_id}' is orientation is '{orientation}'")
+            self.debug(f"Assuming sensor '{sensor_id}' is orientation is '{orientation}'")
 
             meta["sensors"][sensor_id] = {
                 "long_name": sensor["longName"],
@@ -1061,8 +1084,8 @@ class DataCollector(LoggerSuperclass):
                     "sdn_uom_uri": units["definition"],
                     "standard_name": variable["standard_name"],
                 }
-            elif variable["type"] == "biological":
-                raise ValueError("Unimplemented!")
+            elif variable["type"] in ["biological", "biodiversity"]:
+                raise ValueError(f"Unimplemented! {variable_id}")
 
             elif variable["type"] == "technical":
                 meta["variables"][varname] = {
@@ -1098,6 +1121,15 @@ class DataCollector(LoggerSuperclass):
             }
             populate_dict( platform,  meta["platforms"][platform_name], optional_args)
 
+        if  "keepFieldOfView" in dataset["dataSourceOptions"].keys() and dataset["dataSourceOptions"]["keepFieldOfView"]:
+            self.debug("Adding field_of_view metadata")
+        meta["variables"]["field_of_view"] = {
+            "long_name": "Field of View",
+            "variable_type": "technical",
+            "comment": "Short description of where the camera is pointing at or the objects within the field of view"
+        }
+
+
         return meta
 
 
@@ -1125,12 +1157,15 @@ class DataCollector(LoggerSuperclass):
             self.emso = emso_metadata_harmonizer.metadata.EmsoMetadata()
         # dataframes = [df.reset_index() for df in dataframes]
         data_files = []
+
+        unique_id = uuid.uuid4()
+
         for i, df in enumerate(dataframes):
-            f = f"data_{i:02d}.csv"
+            f = f".temp_{i:02d}_{unique_id}.csv"
             df.to_csv(f)
             data_files.append(f)
 
-        meta_file = f"meta_{time.time()}.yaml"
+        meta_file = f"meta_{unique_id}.yaml"
         with open(meta_file, "w") as f:
             yaml.dump(metadata, f)
 

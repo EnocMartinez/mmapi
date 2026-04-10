@@ -104,6 +104,10 @@ class DatasetObject(LoggerSuperclass):
         :return: URL (if fileserver is passed) or filesystem path
         """
 
+        if self.service_name == "local":
+            self.warning("Ignoring register and deliver local dataset!")
+            return self.filename
+
         if not self.delivered:
             required_url = False
             if self.service_name == "fileserver":

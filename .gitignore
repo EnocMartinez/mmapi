@@ -5,8 +5,10 @@ log/
 */log*
 */logs/*
 *.png
-MongoData
 *.csv
+
+scripts/backups
+
 tests/conf/.datasets.xml.*
 **/.emso/**
 # Byte-compiled / optimized / DLL files
