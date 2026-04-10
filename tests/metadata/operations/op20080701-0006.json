@@ -1,0 +1,19 @@
+{
+  "#id": "op20200101-0001",
+  "#author": "enoc_martinez",
+  "#version": 8,
+  "#creationDate": "2026-01-15T11:40:15Z",
+  "#modificationDate": "2026-03-23T10:13:07Z",
+  "name": "Dummy operation",
+  "type": "intervention",
+  "links": [ ],
+  "status": "done",
+  "@projects": ["Geo-INQUIRE"],
+  "timeRange": "2020-01-01T09:00:00Z/2020-01-01T14:00:00Z/",
+  "@resources": [
+    "capelli650"
+  ],
+  "@activities": ["sbe37depl"],
+  "description": "Dummy operation",
+  "participants": []
+}

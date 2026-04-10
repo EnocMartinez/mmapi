@@ -1,0 +1,18 @@
+{
+  "#id": "OBSEA_concrete_biotop",
+  "#author": "enoc_martinez",
+  "#version": 2,
+  "#creationDate": "2024-11-29T10:02:46Z",
+  "#modificationDate": "2026-02-11T08:35:09Z",
+  "name": "OBSEA concrete biotop",
+  "type": "infrastructure",
+  "pictures": {
+    "other": [
+      "https://files.obsea.es/other/resources/OBSEA_concrete_biotop/DSCF3988.JPG",
+      "https://files.obsea.es/other/resources/OBSEA_concrete_biotop/DSCF5865.JPG",
+      "https://files.obsea.es/other/resources/OBSEA_concrete_biotop/biotops.jpg"
+    ]
+  },
+  "description": "Concrete biotop in the OBSEA area",
+  "documentation": {}
+}

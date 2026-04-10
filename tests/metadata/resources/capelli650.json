@@ -1,0 +1,34 @@
+{
+  "#id": "capelli650",
+  "#author": "enoc_martinez",
+  "#version": 2,
+  "#creationDate": "2026-01-26T10:51:12Z",
+  "#modificationDate": "2026-02-11T08:35:09Z",
+  "name": "Capelli-650",
+  "type": "boat",
+  "pictures": {
+    "other": [
+      "https://files.obsea.es/other/resources/capelli650/capelli650.jpg"
+    ]
+  },
+  "properties": {
+    "power": {
+      "units": "CV",
+      "value": 100
+    },
+    "length": {
+      "value": 6.5,
+      "@units": "meters"
+    },
+    "draught": {
+      "value": 0.5,
+      "@units": "meters"
+    }
+  },
+  "description": "Boat from Azimut",
+  "documentation": {
+    "other": [
+      "https://www.yatesazimut.com/capelli-650/"
+    ]
+  }
+}
