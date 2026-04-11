@@ -574,3 +574,26 @@ def populate_dict(src: dict, dest: dict, terms: dict):
         value, found = __get_nested_dict(src, source)
         if found:
             __set_nested_dict(dest, destination, value)
+
+
+def str_to_timerange(str_time_range):
+    assert_type(str_time_range, str)
+
+    if "/" not in str_time_range:
+        raise ValueError(
+            "Time range must be specified as start/end, e.g. 2023-01-01/2023-01-02"
+        )
+    start_str, end_str = str_time_range.split("/")
+
+    start = pd.Timestamp(start_str)
+    end = pd.Timestamp(end_str)
+
+    if start.tz is None:
+        start = start.tz_localize("UTC")
+    if end.tz is None:
+        end = end.tz_localize("UTC")
+
+    if end <= start:
+        raise ValueError("End time must be greater than start time")
+
+    return start, end

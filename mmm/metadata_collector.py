@@ -901,7 +901,7 @@ class MetadataCollector(LoggerSuperclass):
     def get_last_sensor_deployment(self, sensor_id) -> Tuple[str, pd.Timestamp, bool]:
         """
         Returns the name of the last station where this sensor was deployed
-        :return: station_id and timestamp
+        :return: station_id (str), deployment_time (pd.Timestamp), is_active (bool)
         """
         assert_type(sensor_id, str)
         doc = self.db.value_from_query(

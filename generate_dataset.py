@@ -15,6 +15,8 @@ import yaml
 import rich
 import logging
 import pandas as pd
+
+from mmm.common import str_to_timerange
 from mmm.metadata_collector import init_metadata_collector
 import os
 
@@ -25,8 +27,9 @@ import os
 # TODO implement current (e.g. this month)
 
 
-def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, secrets, log: logging.Logger,
-                     format:str= "", verbose=False, erddap_config=False, overwrite=False, resources=[]):
+def generate_dataset(dataset_id: str, service_name: str, time_start: pd.Timestamp, time_end: pd.Timestamp, secrets,
+                     log: logging.Logger, format:str= "", verbose=False, erddap_config=False, overwrite=False,
+                     resources=[]):
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -50,10 +53,6 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
     mc = init_metadata_collector(secrets, log=log)
     dc = DataCollector(secrets, log, mc=mc)
 
-    if time_start: time_start = pd.Timestamp(time_start)
-    else: time_start = None
-    if time_end: time_end = pd.Timestamp(time_end)
-    else: time_end = None
 
     dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, secrets=secrets,
                         overwrite=overwrite, erddap_config=erddap_config, resources=resources)
@@ -101,7 +100,7 @@ if __name__ == "__main__":
         deliver = False
 
     if args.time_range:
-        tstart, tend = args.time_range.split("/")
+        tstart, tend = str_to_timerange(args.time_range)
     else:
         tstart = ""
         tend = ""
