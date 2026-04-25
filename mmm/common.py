@@ -97,6 +97,24 @@ def setup_log(name, path="log", log_level="debug"):
     return logger
 
 
+def ask_user_input(text: str) -> bool:
+    """
+    Ask the user a yes/no question and return True for yes, False for no.
+    Keeps asking until the user enters a valid response.
+    """
+    prompt = f"{text} (y/n)"
+    while True:
+        rich.print(prompt)
+        response = input().strip().lower()
+
+        if response in ("y", "yes"):
+            return True
+        if response in ("n", "no"):
+            return False
+
+        rich.print("[yellow]Please answer with 'y' or 'n'.")
+
+
 def file_list(dir_name) -> list:
     """ create a list of file and sub directories names in the given directory"""
     assert os.path.isdir(dir_name), f"{dir_name} is not a directory!"

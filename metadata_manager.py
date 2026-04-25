@@ -12,6 +12,7 @@ created: 21/09/2023
 from argparse import ArgumentParser, ArgumentError
 
 from mmm import setup_log
+from mmm.common import ask_user_input
 from mmm.metadata_collector import MetadataCollector, init_metadata_collector
 import yaml
 import rich
@@ -211,9 +212,7 @@ if __name__ == "__main__":
         exit()
 
     if args.clear_history:
-        rich.print(f"[red]WARNING! This will erase ALL history records, do you want to continue? (yes/no)")
-        response = input()
-        if response != "yes":
+        if not ask_user_input("[red]WARNING! This will erase ALL history records, do you want to continue"):
             rich.print("cancelling request")
             exit()
         mc.reset_version_history()
@@ -285,10 +284,12 @@ if __name__ == "__main__":
                 inserted += 1
 
             elif action == "delete":
-                rich.print(f"[red]Do you want to delete document '{document_id}'? ctrl+c to exit")
-                input()
-                mc.delete_document(collection, document_id)
-                deleted += 1
+                if ask_user_input(f"[red]Do you want to delete document '{document_id}'?"):
+                    mc.delete_document(collection, document_id)
+                    rich.print("document deleted")
+                    deleted += 1
+                else:
+                    rich.print("document kept in DB")
             else:
                 raise ValueError("Unknwon operation")
 

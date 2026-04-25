@@ -78,15 +78,14 @@ class ZabbixUpdater(LoggerSuperclass):
 
         self.info("Connecting to Zabbix")
         self.api = ZabbixAPI(url=secrets["zabbix"]["url"])
+        self.api.login(token=secrets["zabbix"]["api_key"])
         logging.getLogger("zabbix_utils").setLevel(logging.WARNING)
         logging.getLogger("concurrent").setLevel(logging.WARNING)
 
-        self.api.login(user=secrets["zabbix"]["user"], password=secrets["zabbix"]["password"])
         self.sender = Sender(server=secrets["zabbix"]["host"], port=secrets["zabbix"]["port"])
 
         self.info("Processing stations...")
         self.register_stations(stations)
-
 
         # DataFrame with the columns: datastream_id, varname, sensor_id, full_data, data_type, average_period
         df = self.sta.dataframe_from_query("""
@@ -105,8 +104,52 @@ class ZabbixUpdater(LoggerSuperclass):
         )
         self.datastreams = df
         self.register_sensors(sensors)
+        self.update_sensor_status()
 
+    def update_sensor_status(self):
+        """
+        Updates the enabled/disabled state in Zabbix for hosts in the OBSEA-related host groups
+        based on the sensor's last deployment status in MMAPI.
+        """
+        self.info("Updating sensor status for OBSEA host groups...")
+        host_groups = self.get_host_groups()
+        hosts = self.get_hosts()
 
+        target_group_names = {"OBSEA", "OBSEA_Besos_Buoy"}
+        target_group_ids = {
+            host_groups[group_name]["groupid"]
+            for group_name in target_group_names
+            if group_name in host_groups
+        }
+
+        if not target_group_ids:
+            self.warning("No target host groups found for sensor status update")
+            return
+
+        # Keep one entry per host, even if it belongs to both groups
+        target_hosts = {}
+        for host in self.api.host.get(groupids=list(target_group_ids)):
+            target_hosts[host["name"]] = host
+
+        for sensor_id, host in target_hosts.items():
+            try:
+                _, deployment_time, active = self.mc.get_last_sensor_deployment(sensor_id)
+            except LookupError:
+                self.debug(f"Ignored sensor {sensor_id} with no deployment")
+                continue
+
+            desired_status = "0" if active else "1"  # Zabbix: 0=enabled, 1=disabled
+            current_status = host["status"]
+
+            if current_status == desired_status:
+                self.debug(f"Host {sensor_id} already matches desired status active={active}")
+                continue
+
+            self.info(f"Updating host {sensor_id} to enabled={active}, deployed on {deployment_time}")
+            self.api.host.update({
+                "hostid": host["hostid"],
+                "status": desired_status,
+            })
 
     def get_hosts(self) -> dict:
         hosts = self.api.host.get()
@@ -362,7 +405,7 @@ if __name__ == "__main__":
     if args.verbose:
         log_level = "debug"
 
-    log = setup_log("zabbix_updatter", log_level=log_level)
+    log = setup_log("zabbix_updater", log_level=log_level)
 
     zbx = ZabbixUpdater(secrets, log)
     zbx.send_last_data(args.period)

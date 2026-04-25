@@ -177,7 +177,6 @@ class PgDatabaseConnector(LoggerSuperclass):
         """
         response = self.exec_query(query, debug=debug, fetch=True)
         if len(response) != 1:
-            self.warning(f"query: {query}")
             raise LookupError(f"Expected only one column, got {len(response)}")
         elif len(response[0]) != 1:
             self.warning(f"query: {query}")

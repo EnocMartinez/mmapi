@@ -12,13 +12,12 @@ import logging
 import pandas as pd
 from mmm import MetadataCollector, CkanClient, SensorThingsApiDB, DataCollector, init_metadata_collector
 import numpy as np
-
 from mmm.common import load_fields_from_dict
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
 from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream, \
     HistoricalLocation, set_sta_basic_auth, init_sta_cache
 from mmm.metadata_collector import get_station_coordinates, get_station_history, get_sensor_deployments
-from mmm.processes import average_process, inference_process
+from mmm.processes import average_process, inference_process, aneris_aies_mac_process_20260414
 from mmm.schemas import mmapi_data_types
 
 logging.getLogger('emso_metadata_harmonizer').setLevel(logging.ERROR)
@@ -306,13 +305,14 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
             station = deployment["station"]
             deployment_time = deployment["start"]
             if station in stations_processed:
-                log.info(f"Skipping station {station}")
+                log.debug(f"Skipping station {station}")
                 continue  # already processed for this sensor
             else:
                 stations_processed.append(station)
             log.info(f"Generating Datastreams for sensor={sensor_name} in station={station}")
             # Create full_data datastreams!
             for var in sensor["variables"]:
+
                 varname = var["@variables"]
                 units = var["@units"]
                 sensor_id = sensor_ids[sensor_name]
@@ -321,7 +321,6 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                 station_doc = mc.get_document("stations", station)
 
                 data_type = var["dataType"]
-
                 if data_type == "timeseries":  # creating timeseries data
                     ds_name = f"{station}:{sensor_name}:{varname}:{data_type}:full"
                     units_doc = mc.get_document("units", units)
@@ -400,6 +399,12 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                     average_process(sensor, process, params, mc, obs_props_ids, sensor_id, thing_id, url, fois,
                                     update=update)
 
+                # AIES-MAC process developed within the ANERIS Project
+                elif sensor_process["@processes"] == "aies_mac_20260414":
+                    aneris_aies_mac_process_20260414(sensor, process, mc, obs_props_ids, sensor_id, thing_id,
+                                      fois[station_doc["defaults"]["@programmes"]], url, dc.log, update=True)
+
+
                 elif process["type"] == "json":
                     inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id,
                                       fois[station_doc["defaults"]["@programmes"]], url, dc.log, update=True)
@@ -473,6 +478,15 @@ def bulk_load_data(filename: str, secrets: dict, sensor_name: str, data_type, fo
         df = df.drop(dup_idx.index)
         df = df.reset_index()
         df = df.set_index("timestamp")
+
+    if data_type == "json":
+        log.info("Look for incorrect nan values in json structure...")
+        assert "results" in df.columns, "JSON data must contain a 'results' column"
+        rgx = r'(?<![A-Za-z0-9_])nan(?![A-Za-z0-9_])'
+        if df["results"].str.contains(rgx, regex=True, na=False).any():
+            log.warning("NaN values detected in JSON structure! replacing with 0.00")
+            df["results"] = df["results"].str.replace(r'(?<![A-Za-z0-9_])nan(?![A-Za-z0-9_])', '0.00', regex=True)
+
 
     df = df.sort_index(ascending=True)
     # Force qc in the upper case -> TEMP_qc -> TEMP_QC

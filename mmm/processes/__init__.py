@@ -12,3 +12,4 @@ created: 19/2/24
 
 from .average import average_process
 from .inference import inference_process
+from .aneris_aies_mac import aneris_aies_mac_process_20260414
