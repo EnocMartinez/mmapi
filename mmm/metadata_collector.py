@@ -700,6 +700,72 @@ class MetadataCollector(LoggerSuperclass):
                     raise ValueError("Contact type not valid!")
         raise LookupError(f"Contact with role '{role}' not found in document '{doc['#id']}'")
 
+    def get_affiliation(self, doc: str|dict, t:pd.Timestamp=None):
+         """
+         Returns the latest affiliation of an individual (person document passed in doc). If t (time) is supplied,
+         the affiliation that matches time is supplied. If multiple affiliations are found at the same time, the first
+         is returned.
+         :param doc: document ID (str) or document (dict) containing th person's info
+         :param t: p.Timatmp
+         :return: organization document_id or Lookup error if not found
+         """
+         assert_types(doc, [str, dict])
+         assert_types(t, [pd.Timestamp, type(None)])
+         if isinstance(doc, str):
+             doc = self.get_document("people", doc)
+
+         if "affiliations" not in doc.keys() or not doc["affiliations"]:
+             raise LookupError(f"Person '{doc['#id']}' has no affiliations")
+
+         affiliations = doc["affiliations"]
+
+         if t is not None:
+             if t.tz is None:
+                 t = t.tz_localize("UTC")
+
+             for affiliation in affiliations:
+                 start = affiliation.get("start", "")
+                 end = affiliation.get("end", "")
+
+                 if not start:
+                     start = pd.Timestamp.min.tz_localize("UTC")
+                 else:
+                     start = pd.Timestamp(start)
+                     if start.tz is None:
+                         start = start.tz_localize("UTC")
+
+                 if not end:
+                     end = pd.Timestamp.max.tz_localize("UTC")
+                 else:
+                     end = pd.Timestamp(end)
+                     if end.tz is None:
+                         end = end.tz_localize("UTC")
+
+                 if start <= t <= end:
+                     return affiliation["@organizations"]
+
+             raise LookupError(f"Affiliation for person '{doc['#id']}' at time {t} not found")
+
+         latest_affiliation = None
+         latest_start = None
+
+         for affiliation in affiliations:
+             start = affiliation.get("start", "")
+             if not start:
+                 start = pd.Timestamp.min.tz_localize("UTC")
+             else:
+                 start = pd.Timestamp(start)
+                 if start.tz is None:
+                     start = start.tz_localize("UTC")
+
+             if latest_start is None or start > latest_start:
+                 latest_start = start
+                 latest_affiliation = affiliation
+
+         if latest_affiliation is None:
+             raise LookupError(f"Affiliation for person '{doc['#id']}' not found")
+
+         return latest_affiliation["@organizations"]
     def __check_link(self, parent_collection: str, parent_doc_id: str, target_collection: str, target_doc: str,
                      errors: list) -> list:
         """

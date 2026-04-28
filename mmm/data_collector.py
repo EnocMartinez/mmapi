@@ -760,18 +760,18 @@ class DataCollector(LoggerSuperclass):
         :return: generated NetCDF filename
         """
         self.info("Creating Darwin Core Archive dataset")
-        assert resource["dataType"] == "json", f"Darwin Core only works with JSON data, got '{conf['dataType']}'"
+        assert resource["dataType"] == "json", f"Darwin Core only works with JSON data, got '{resource['dataType']}'"
         assert_type(conf, dict)
         assert_type(resource, dict)
         assert_type(time_start,  pd.Timestamp)
         assert_type(time_end,  pd.Timestamp)
-
         df = self.dataframe_from_sta(conf, conf["@stations"], conf["@sensors"], resource, time_start=time_start, time_end=time_end)
+        self.log.debug(f"Creating dataset from data: \n{df}")
         if df.empty:
             self.warning(f"Dataset {conf['#id']}:{resource['id']} has no data from {time_start} to {time_end}")
             return "", False
 
-        dwca = DarwinCoreArchive(self.mc, df, conf["@sensors"], conf["@stations"], conf, time_start, time_end, self.log)
+        dwca = DarwinCoreArchive(self.mc, self.sta, df, conf, time_start, time_end, self.log)
         filename = self.dataset_filename(conf, "dwca", time_start, time_end)
         dwca.create_archive(filename)
         return filename, False

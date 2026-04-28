@@ -6,8 +6,9 @@ from lxml import etree
 import pandas as pd
 import requests
 
-from mmm import MetadataCollector
+from mmm import MetadataCollector, SensorThingsApiDB
 from mmm.common import assert_type, LoggerSuperclass, GRN
+from mmm.data_sources.postgresql import sql_list
 from mmm.xmlutils import get_element, serialize_xml, create_element
 
 
@@ -36,7 +37,7 @@ from mmm.xmlutils import get_element, serialize_xml, create_element
 #                                    │confidence          │  0.79                ◄─────────────────┼  │
 #                                    │bounding_box_xyxy   │  0.14 0.78 0.45 0.69 ◄─────────────────┘  │
 #                                    │confidence          │                      │                    │
-#                                    │bounding box_xyxy   │  0.76                ◄────────────────────┤
+#                                    │boundi    ng box_xyxy   │  0.76                ◄────────────────────┤
 #                                    │confidence          │  0.45 0.78 0.36 0.95 ◄────────────────────┘
 #                                    └────────────────────┼──────────────────────┘
 
@@ -50,32 +51,38 @@ class DarwinCoreArchive(LoggerSuperclass):
         [{"taxa": "Chromis chromis", "confidence": 0.975, "bounding_box_xyxy": [0.389, 0.312, 0.461, 0.427]}, {"taxa": "Chromis chromis", "confidence": 0.969, "bounding_box_xyxy": [0.816, 0.091, 0.836, 0.14]}, {"taxa": "Chromis chromis", "confidence": 0.927, "bounding_box_xyxy": [0.21, 0.69, 0.23, 0.724]}, {"taxa": "Chromis chromis", "confidence": 0.911, "bounding_box_xyxy": [0.524, 0, 0.547, 0.046]}, {"taxa": "Chromis chromis", "confidence": 0.86, "bounding_box_xyxy": [0.541, 0.311, 0.556, 0.339]}, {"taxa": "Chromis chromis", "confidence": 0.713, "bounding_box_xyxy": [0.381, 0.398, 0.395, 0.421]}, {"taxa": "Chromis chromis", "confidence": 0.656, "bounding_box_xyxy": [0.236, 0.402, 0.259, 0.422]}]
 
     """
-    def __init__(self, mc: MetadataCollector, df: pd.DataFrame, sensor_ids: list, station_ids: list, dataset: dict,
+    def __init__(self, mc: MetadataCollector, sta: SensorThingsApiDB, df: pd.DataFrame, dataset: dict,
                  time_start: pd.Timestamp, time_end: pd.Timestamp, log:logging.Logger):
         """
         Creates a Darwin Core class with Event core, Occurrences and eMoF tables
         :param mc:
         """
+
         LoggerSuperclass.__init__(self, log, "DwC", colour=GRN)
         self.dwc_prefix = "http://rs.tdwg.org/dwc/terms/"
 
-        if len(station_ids) != 1:
-            raise ValueError("Unimplemented DwCa with several stations!")
+        # Terms found on https://rs.obis.org/obis/terms
+        self.ris_iobis_terms = ["measurementTypeID", "measurementValueID", "measurementUnitID"]
+        self.ris_iobis_prefix = "http://rs.obis.org/obis/terms/"
+        self.field_separator = "\\t"
 
-        if len(sensor_ids) != 1:
-            raise ValueError("Unimplemented DwCa with several sensors!")
-
+        self.line_separator = "\\n"
 
         assert_type(mc, MetadataCollector)
+        assert_type(sta, SensorThingsApiDB)
         self.mc = mc
+        self.sta = sta
         self.dataset = dataset
         # Get the AI process
         self.process = self.mc.get_document("processes", dataset["constraints"]["@processes"])
-        self.df = df
-        station = self.mc.get_document("stations", station_ids[0])
 
-        self.time_start = df.index.min()
-        self.time_end = df.index.max()
+        log.debug("Merging feature of interest descriptions into main dataframe")
+        fois_ids = df["foi"].unique().tolist()
+        foi_names = self.get_foi_description(fois_ids)
+        df = df.reset_index()
+        df = df.merge(foi_names, on="foi", how="left")
+        df = df.set_index("timestamp")
+        self.df = df
 
         # Files are empty by default
         self.f_events = ""
@@ -83,69 +90,149 @@ class DarwinCoreArchive(LoggerSuperclass):
         self.f_emofs = ""
         self.taxa_dict = {}
 
+        sensors = [self.mc.get_document("sensors", s) for s in df["sensor_id"].unique().tolist()]
 
-        field_of_view = df["foi"].values[0]
-        self.field_of_view = field_of_view
+        assert len(dataset["@stations"]) == 1, f"Darwin Core only implemented for dataset with only one station"
 
-        if len(df["foi"].unique()) > 1:
-            # Keeping only the fois that we want
-            print(df)
-            df = df[df["foi"] == field_of_view]
-
-        assert len(df["foi"].unique()) == 1, f"Multiple FoIs unimplemented"
-
-        sensor_name = sensor_ids[0]
-        station_name = station_ids[0]
+        station_id = self.dataset["@stations"][0]
+        station = self.mc.get_document("stations", station_id)
+        station_name = station["#id"]
         process_name = self.process["#id"]
         if "reference" not in self.process.keys():
             self.error(f"reference field not included in process '{process_name}'", exception=ValueError)
 
         algorithm_reference = self.process["reference"]
 
-        generic_metadata = (  # measurementType , measurementTypeID, measurementValue
-            # Name of the sensor
-            ("Name of sampling platform", "http://vocab.nerc.ac.uk/collection/P01/current/NMSPPF01/", station_name),
-            ("Name of sampling instrument", "http://vocab.nerc.ac.uk/collection/P01/current/NMSPINST/", sensor_name),
-            ("Camera field of view", "", field_of_view)
-            # serial number
-        )
         taxa_dict = self.mc.get_taxa_aphia_dict()
         self.taxa_dict = taxa_dict
-        latitude, longitude, depth = self.mc.get_sensor_deployment(sensor_name, time_start)
+
+        latitude, longitude, depth = self.mc.get_station_coordinates(station_name, time_start)
         self.latitude = latitude
         self.longitude = longitude
-        self.station_name = station["#id"]
+        self.station_name = station_name
+
         events = []
         occurrences = []
         emofs = []
 
-        # Appending camera info
-        camera_event_id = sensor_name + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d")
+        # Creating event hierarcy as follows
+        # <dataset>_<from>_<to>
+        #    │──camera1_<from>_<to>
+        #    │  │── camera1_picture1
+        #    │  └── camera1_picture2
+        #    │
+        #    └──camera2_<from>_<to>
+        #       │── camera2_picture1
+        #       └── camera2_picture2
+        #
+
+        self.info("Creating event hierarchy...")
+        df["parentEventID"] = ""
+        self.parent_event_id = dataset["#id"] + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d")
+        self.debug(f"Parent event ID: {self.parent_event_id}")
+
+        # Append parent event ID
         events.append({
-            "id": camera_event_id,
-            "eventID": camera_event_id,
+            "id": self.parent_event_id,
+            "eventID": self.parent_event_id,
             "parentEventID": "",
             "geodeticDatum": "EPSG:4326",
             "decimalLatitude": latitude,
             "decimalLongitude": longitude,
             "minimumDepthInMeters": depth,
             "maximumDepthInMeters": depth,
-            "eventTime": time_start.strftime("%Y-%m-%dT%H:%M:%SZ") + "/" + time_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+            "eventTime": time_start.strftime("%Y-%m-%dT%H:%M:%SZ") + "/" + time_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "datasetName": dataset["title"],
+            "institutionCode": "UPC",  # TODO change this hardcoded institution!
         })
 
-        for measurement_type, measurement_type_id, measurement_value in generic_metadata:
-            emofs.append({
+        self.camera_events = {}
+        for sensor in sensors:
+            camera_event_id = sensor["#id"] + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d")
+            self.debug(f"Creating camera event ID: {camera_event_id}")
+            events.append({
                 "id": camera_event_id,
                 "eventID": camera_event_id,
-                "occurrenceID": "",
-                "measurementType": measurement_type,
-                "measurementTypeID": measurement_type_id,
-                "measurementValue": measurement_value,
-                "measurementValueID": "",
-
-                # TODO: get camera info / platform /station type from the database
-
+                "parentEventID": self.parent_event_id,
+                "eventTime": time_start.strftime("%Y-%m-%dT%H:%M:%SZ") + "/" + time_end.strftime("%Y-%m-%dT%H:%M:%SZ")
             })
+            df = self.df
+            df.loc[df["sensor_id"] == sensor["#id"], "parentEventID"] = camera_event_id
+            self.camera_events[sensor["#id"]] = camera_event_id
+
+
+        #======== Station Metadata ========#
+        self.info("Adding station metadata to EMOF table...")
+        station_name = station["#id"]
+        station_url = ""
+        # Trying to extract OSO info
+        try:
+            station_name = station["oso"]["platform"]["label"]
+            station_url = station["oso"]["platform"]["definition"]
+            self.debug(f"Using OSO information, station name: '{station_name}'")
+        except KeyError:
+            self.debug("OSO info not found")
+            pass
+
+        emofs.append({
+            "id": self.parent_event_id,
+            "occurrenceID": "",
+            "measurementType": "Name of sampling platform",
+            "measurementTypeID": "http://vocab.nerc.ac.uk/collection/P01/current/NMSPINST/",
+            "measurementValue": station_name,
+            "measurementValueID": station_url,
+            # measurementUnit
+            # measurementUnitID  -> URL
+            }
+        )
+
+        try:
+            ptype_name = station["platformType"]["label"]
+            ptype_url = station["platformType"]["definition"]
+        except KeyError as e:
+            self.error(f"Could not get platform type for station: '{station_id}'")
+            self.logger.exception(e)
+            raise e
+
+        emofs.append({
+            "id": self.parent_event_id,
+            "occurrenceID": "",
+            "measurementType": "Platform type",
+            "measurementTypeID": "http://vocab.nerc.ac.uk/collection/W06/current/CLSS0001/",
+            "measurementValue": ptype_name,
+            "measurementValueID": ptype_url,
+        })
+
+        #======== Camera Metadata ========#
+        self.info(f"Adding camera metadata to EMOF table...")
+        for sensor in sensors:
+            sensor_id = sensor["#id"]
+            self.debug(f"    camera: {sensor_id}")
+            camera_event = self.camera_events[sensor["#id"]]
+            # append camera name
+            emofs.append({
+                "id": camera_event,
+                "measurementType": "Name of sampling instrument",
+                "measurementTypeID": "http://vocab.nerc.ac.uk/collection/P01/current/NMSPINST/",
+                "measurementValue": sensor_id
+            })
+            # instrument type
+            emofs.append({
+                "id": camera_event,
+                "measurementType": "Instrument type",
+                "measurementTypeID": "https://vocab.nerc.ac.uk/collection/W06/current/CLSS0002/",
+                "measurementValue": sensor["instrumentType"]["label"],
+                "measurementValueID": sensor["instrumentType"]["definition"]
+            })
+            # instrument model
+            emofs.append({
+                "id": camera_event,
+                "measurementType": "instrument model",
+                "measurementTypeID": "",
+                "measurementValue": sensor["model"]["label"],
+                "measurementValueID": sensor["model"]["definition"]
+            })
+
         for idx, row in df.iterrows():
             # Store the picture as an event
             pic = row["parameters"]["sourceImage"]
@@ -153,43 +240,53 @@ class DarwinCoreArchive(LoggerSuperclass):
             events.append({
                 "id": pic,
                 "eventID": pic,
-                "parentEventID": camera_event_id,
+                "parentEventID": row["parentEventID"],
                 "eventType": "Observation",
                 "eventDate": idx.strftime("%Y-%m-%dT%H:%M:%SZ")
             })
 
+            # Add FieldOfView for every
+            emofs.append({
+                "id": pic,
+                "measurementType": "field of view",
+                "measurementValue": row["foi"],
+                "measurementRemarks": row["measurementRemarks"]
+            })
+
             for i, res in enumerate(row["value"]):
                 taxa = res["taxa"]
-                normalized_taxa = taxa.replace(".", "").replace(" ", "_")
                 occurrence_id = pic + f"?n={i + 1:03d}"
                 if taxa not in taxa_dict.keys():
                     self.debug(f"Ignoring pic with taxa '{taxa}' {pic}")
                     continue
                 occurrences.append({
-                    "id": occurrence_id,
-                    "eventID": pic,
+                    "id": pic,
                     "occurrenceID": occurrence_id,
                     "scientificName": res["taxa"],
                     "scientificNameID": "urn:lsid:marinespecies.org:taxname:" + str(taxa_dict[taxa]),
                     "identificationReferences": algorithm_reference,
                     "basisOfRecord": "MachineObservation",
-                    "identificationVerificationStatus": "PredictedByMachine"
+                    "identificationVerificationStatus": "PredictedByMachine",
+                    "occurrenceStatus": "present",
+                    "associatedMedia": pic,
                 })
                 bounding_box_xyxy = " ".join([str(f) for f in res["bounding_box_xyxy"]])
+
                 emofs.append({
-                    "id": occurrence_id + "_bbox",
+                    "id": pic,
                     "occurrenceID": occurrence_id,
-                    "associatedMedia": pic,
                     "measurementType": "bounding_box_xyxy",
                     "measurementValue": bounding_box_xyxy,
                 })
 
                 emofs.append({
-                    "id": occurrence_id + "__conf",
+                    "id": pic,
                     "occurrenceID": occurrence_id,
-                    "associatedMedia": pic,
                     "measurementType": "confidence",
-                    "measurementValue": res["confidence"]
+                    "measurementValue": res["confidence"],
+                    "measurementUnit": "fraction of 1",
+                    "measurementUnitID": "https://vocab.nerc.ac.uk/collection/P06/current/UUUU/"
+
                 })
 
         self.emofs = pd.DataFrame(emofs)
@@ -216,18 +313,27 @@ class DarwinCoreArchive(LoggerSuperclass):
             f"============================="
         ])
 
+    def get_foi_description(self, foi_ids):
+        names = sql_list(foi_ids, string=True)
+        q = f"""
+        select "NAME" as foi, "DESCRIPTION" as "measurementRemarks" from "FEATURES" where "NAME" in {names}
+        """
+        return self.sta.dataframe_from_query(q)
+
     def create_archive(self, filename):
         f"""
         Creates a ZIP archive for Darwin Core Archive with Event, Occurrence and eMoF tables and eml.xml and meta.xml files
         """
+
+        
         tmp_folder = os.path.dirname(filename)
         os.makedirs(tmp_folder, exist_ok=True)
         self.f_events = os.path.join(tmp_folder, "events.txt")
         self.f_occurrences = os.path.join(tmp_folder, "occurrences.txt")
         self.f_emofs = os.path.join(tmp_folder, "emofs.txt")
-        self.events.to_csv(self.f_events, index=False, sep="\t")
-        self.occurrences.to_csv(self.f_occurrences, index=False, sep="\t")
-        self.emofs.to_csv(self.f_emofs, index=False, sep="\t")
+        self.events.to_csv(self.f_events, index=False, sep="\t", encoding="utf-8")
+        self.occurrences.to_csv(self.f_occurrences, index=False, sep="\t", encoding="utf-8")
+        self.emofs.to_csv(self.f_emofs, index=False, sep="\t", encoding="utf-8")
         
         self.meta_xml = self.create_meta("meta.xml", tmp_folder)
         self.eml_xml = self.create_eml("eml.xml", tmp_folder)
@@ -245,19 +351,19 @@ class DarwinCoreArchive(LoggerSuperclass):
         # Now, let's create the XML metadata file
         meta_xml = f"""
         <archive xmlns="http://rs.tdwg.org/dwc/text/" metadata="eml.xml">
-          <core encoding="UTF-8" fieldsTerminatedBy="\t" linesTerminatedBy="\n" fieldsEnclosedBy="" ignoreHeaderLines="1" rowType="http://rs.tdwg.org/dwc/terms/Event">
+          <core encoding="UTF-8" fieldsTerminatedBy="\\t" linesTerminatedBy="\\n" fieldsEnclosedBy="" ignoreHeaderLines="1" rowType="http://rs.tdwg.org/dwc/terms/Event">
             <files>
               <location>{os.path.basename(self.f_events)}</location>
             </files>
             <id index="0"/>
           </core>
-          <extension encoding="UTF-8" fieldsTerminatedBy="\t" linesTerminatedBy="\n" fieldsEnclosedBy="" ignoreHeaderLines="1" rowType="http://rs.iobis.org/obis/terms/Occurrence">
+          <extension encoding="UTF-8" fieldsTerminatedBy="\\t" linesTerminatedBy="\\n" fieldsEnclosedBy="" ignoreHeaderLines="1" rowType="http://rs.tdwg.org/dwc/terms/Occurrence">
             <files>
               <location>{os.path.basename(self.f_occurrences)}</location>
             </files>
             <coreid index="0" />
           </extension>
-          <extension encoding="UTF-8" fieldsTerminatedBy="\t" linesTerminatedBy="\n" fieldsEnclosedBy="" ignoreHeaderLines="1" rowType="http://rs.tdwg.org/dwc/terms/ExtendedMeasurementOrFact">
+          <extension encoding="UTF-8" fieldsTerminatedBy="\\t" linesTerminatedBy="\\n" fieldsEnclosedBy="" ignoreHeaderLines="1" rowType="http://rs.iobis.org/obis/terms/ExtendedMeasurementOrFact">
             <files>
               <location>{os.path.basename(self.f_emofs)}</location>
             </files>
@@ -267,8 +373,8 @@ class DarwinCoreArchive(LoggerSuperclass):
         """
         tree = etree.ElementTree(etree.fromstring(meta_xml))
         self.add_column_meta_xml(tree, self.events, "core","http://rs.tdwg.org/dwc/terms/Event")
-        self.add_column_meta_xml(tree, self.occurrences, "extension", "http://rs.iobis.org/obis/terms/Occurrence")
-        self.add_column_meta_xml(tree, self.emofs, "extension", "http://rs.tdwg.org/dwc/terms/ExtendedMeasurementOrFact")
+        self.add_column_meta_xml(tree, self.occurrences, "extension", "http://rs.tdwg.org/dwc/terms/Occurrence")
+        self.add_column_meta_xml(tree, self.emofs, "extension", "http://rs.iobis.org/obis/terms/ExtendedMeasurementOrFact")
         meta_xml_file = os.path.join(folder, filename)
         self.info("Creating meta.xml file...")
         with open(meta_xml_file, "w") as f:
@@ -281,9 +387,17 @@ class DarwinCoreArchive(LoggerSuperclass):
         and "row_type"""
         core_event = get_element(tree, f"dwc:{element}", attr="rowType", attr_value=row_type)
         for i, column_name in enumerate(df.columns):
+            if column_name == "id":
+                continue
             element = etree.SubElement(core_event, "field")
-            element.attrib["index"] = str(i + 1)
-            element.attrib["term"] = self.dwc_prefix + str(column_name)
+            element.attrib["index"] = str(i)
+            element.attrib["term"] = self.column_name_to_term(str(column_name))
+
+    def column_name_to_term(self, colname):
+        if colname in self.ris_iobis_terms:
+            return self.ris_iobis_prefix + colname
+        else:
+            return self.dwc_prefix + colname
 
 
     def create_eml(self, filename, folder):
@@ -322,6 +436,7 @@ class DarwinCoreArchive(LoggerSuperclass):
             self.__add_metadata_provider(tree, o)
 
         now = datetime.datetime.now().strftime("%Y-%m-%d")
+        create_element(dataset, "datasetName", text=conf["title"])
         create_element(dataset, "pubDate", text=now)
         create_element(dataset, "language", text="en")
         # Add abstract
@@ -362,8 +477,6 @@ class DarwinCoreArchive(LoggerSuperclass):
         contact = create_element(dataset, "contact")
         create_element(contact,"organizationName", text=org_full_name)
 
-
-
         meta_xml_file = os.path.join(folder, filename)
         self.info("Creating eml.xml file...")
         with open(meta_xml_file, "w") as f:
@@ -391,9 +504,9 @@ class DarwinCoreArchive(LoggerSuperclass):
         individual_name = create_element(creator, "individualName")
         create_element(individual_name, "givenName", text=person["givenName"])
         create_element(individual_name, "surName", text=person["familyName"])
-        affiliation = self.mc.get_document("organizations", person["@organizations"])
-        if isinstance(affiliation, list):
-            affiliation = affiliation[0]
+        affiliation_id = self.mc.get_affiliation(person)
+        affiliation = self.mc.get_document("organizations", affiliation_id)
+
         create_element(creator, "organizationName", text=affiliation["fullName"])
         create_element(creator, "electronicMailAddress", text=person["email"])
         if "orcid" in person.keys() and person["orcid"]:
