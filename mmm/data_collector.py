@@ -459,7 +459,7 @@ class DataCollector(LoggerSuperclass):
 
         return df
 
-    def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=None, tstart=None, tend=None, first=False, last=False):
+    def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=None, tstart=None, tend=None, first=False, last=False, model_name=None,):
         """
         This function returns generic DataFrame with the same columns for all data types. The generic dataframe has the
         following columns:
@@ -515,12 +515,19 @@ class DataCollector(LoggerSuperclass):
                 and "THING_ID" in (select "ID" from "THINGS" WHERE "NAME" in {sql_list(station_ids)})
                 and "PROPERTIES"->>'dataType' = '{data_type}'
         """
+
+
+
         # Averaged data needs to be filtered by averagePeriod
         if average:
             query += f""" and "PROPERTIES"->>'averagePeriod' = '{average}'"""
         # In timeseries/profiles/detections we need to be sure to select only fullData
         elif data_type in ["timeseries", "profiles", "detections"]:
             query += f"""     and ("PROPERTIES"->>'fullData')::boolean = True """
+
+        # if there's constraints/@process match we should filter in STA modelName=process
+        if model_name:
+            query += f"""     and "PROPERTIES"->>'modelName' = '{model_name}' """
 
         query += ";"
         datastream_ids = self.sta.list_from_query(query)
@@ -715,7 +722,12 @@ class DataCollector(LoggerSuperclass):
         except KeyError:
             avg_period=""
 
-        df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
+        model_name = ""
+        if "@processes" in conf["constraints"].keys():
+            model_name = conf["constraints"]["@processes"]
+        if model_name:
+            self.info("Keeping only data from model: " + model_name)
+        df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end, model_name=model_name)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
         df = df[["timestamp", "depth", "latitude", "longitude", "value", "parameters", "variable", "sensor_id", "platform_id", "foi"]]
         return df.set_index("timestamp")
