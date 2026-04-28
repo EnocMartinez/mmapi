@@ -61,6 +61,12 @@ class DarwinCoreArchive(LoggerSuperclass):
         LoggerSuperclass.__init__(self, log, "DwC", colour=GRN)
         self.dwc_prefix = "http://rs.tdwg.org/dwc/terms/"
 
+        if os.path.exists(".species.cache"):
+            self.__species_cache = pd.read_csv(".species.cache")
+            self.__species_cache["aphiaID"] = self.__species_cache["aphiaID"].astype(str)
+        else:
+            self.__species_cache = pd.DataFrame(columns=["aphiaID", "taxonRankName", "taxonRankValue"])
+
         # Terms found on https://rs.obis.org/obis/terms
         self.ris_iobis_terms = ["measurementTypeID", "measurementValueID", "measurementUnitID"]
         self.ris_iobis_prefix = "http://rs.obis.org/obis/terms/"
@@ -540,6 +546,15 @@ class DarwinCoreArchive(LoggerSuperclass):
         :param aphia_id:
         :return:
         """
+
+        df = self.__species_cache
+        if aphia_id in self.__species_cache["aphiaID"].to_list():
+            rank = df[df["aphiaID"] == aphia_id]["taxonRankName"].values[0]
+            name = df[df["aphiaID"] == aphia_id]["taxonRankValue"].values[0]
+            return rank, name
+
+        self.info("Getting Aphia details from marinespecies.org API")
+
         url = f"https://www.marinespecies.org/rest/AphiaRecordByAphiaID/{aphia_id}"
         r = requests.get(url)
         results = r.json()
