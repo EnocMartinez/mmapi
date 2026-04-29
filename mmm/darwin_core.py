@@ -59,7 +59,34 @@ class DarwinCoreArchive(LoggerSuperclass):
         """
 
         LoggerSuperclass.__init__(self, log, "DwC", colour=GRN)
+        dataset_id = dataset["#id"]
+
+        self.info("Making sure that we have just a dwca resource under the fileserver dataset")
+
+        # Pick the fileserver resource
+        try:
+            resources = dataset["export"]["fileserver"]["resources"]
+        except KeyError:
+            raise ValueError(f"DarwinCore should be configured using fileserver dataset, none found in dataset {dataset_id}")
+
+        resource = {}
+        for r in resources:
+            if r["format"] == "dwca":
+                if not resource:
+                    resource = r
+                else:
+                    raise ValueError("Multiple resources found with type dwca!")
+
+        if not resource:
+            raise ValueError("Resource with DwCa format and fileserver not found!")
+
+
+        assert resource["period"] == "yearly", f"DarwinCoreArchive only supports yearly datasets!"
+        self.title = dataset["title"] + " " + time_start.strftime("%Y")
+
         self.dwc_prefix = "http://rs.tdwg.org/dwc/terms/"
+
+        self.contact_email = ""  # use the first email found
 
         if os.path.exists(".species.cache"):
             self.__species_cache = pd.read_csv(".species.cache")
@@ -69,7 +96,7 @@ class DarwinCoreArchive(LoggerSuperclass):
 
         # Terms found on https://rs.obis.org/obis/terms
         self.ris_iobis_terms = ["measurementTypeID", "measurementValueID", "measurementUnitID"]
-        self.ris_iobis_prefix = "http://rs.obis.org/obis/terms/"
+        self.ris_iobis_prefix = "http://rs.iobis.org/obis/terms/"
         self.field_separator = "\\t"
 
         self.line_separator = "\\n"
@@ -91,9 +118,9 @@ class DarwinCoreArchive(LoggerSuperclass):
         self.df = df
 
         # Files are empty by default
-        self.f_events = ""
-        self.f_occurrences = ""
-        self.f_emofs = ""
+        self.f_events = f"events_{time_start.strftime('%Y%m%d')}_{time_end.strftime('%Y%m%d')}.txt"
+        self.f_occurrences = f"occurrences_{time_start.strftime('%Y%m%d')}_{time_end.strftime('%Y%m%d')}.txt"
+        self.f_emofs = f"emofs_{time_start.strftime('%Y%m%d')}_{time_end.strftime('%Y%m%d')}.txt"
         self.taxa_dict = {}
 
         sensors = [self.mc.get_document("sensors", s) for s in df["sensor_id"].unique().tolist()]
@@ -148,7 +175,7 @@ class DarwinCoreArchive(LoggerSuperclass):
             "minimumDepthInMeters": depth,
             "maximumDepthInMeters": depth,
             "eventTime": time_start.strftime("%Y-%m-%dT%H:%M:%SZ") + "/" + time_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "datasetName": dataset["title"],
+            "datasetName": self.title,
             "institutionCode": "UPC",  # TODO change this hardcoded institution!
         })
 
@@ -204,7 +231,7 @@ class DarwinCoreArchive(LoggerSuperclass):
             "id": self.parent_event_id,
             "occurrenceID": "",
             "measurementType": "Platform type",
-            "measurementTypeID": "http://vocab.nerc.ac.uk/collection/W06/current/CLSS0001/",
+            "measurementTypeID": "http://vocab.nerc.ac.uk/collection/P01/current/TCSPPF01/",
             "measurementValue": ptype_name,
             "measurementValueID": ptype_url,
         })
@@ -226,7 +253,7 @@ class DarwinCoreArchive(LoggerSuperclass):
             emofs.append({
                 "id": camera_event,
                 "measurementType": "Instrument type",
-                "measurementTypeID": "https://vocab.nerc.ac.uk/collection/W06/current/CLSS0002/",
+                "measurementTypeID": "",
                 "measurementValue": sensor["instrumentType"]["label"],
                 "measurementValueID": sensor["instrumentType"]["definition"]
             })
@@ -334,9 +361,9 @@ class DarwinCoreArchive(LoggerSuperclass):
         
         tmp_folder = os.path.dirname(filename)
         os.makedirs(tmp_folder, exist_ok=True)
-        self.f_events = os.path.join(tmp_folder, "events.txt")
-        self.f_occurrences = os.path.join(tmp_folder, "occurrences.txt")
-        self.f_emofs = os.path.join(tmp_folder, "emofs.txt")
+        self.f_events = os.path.join(tmp_folder, self.f_events)
+        self.f_occurrences = os.path.join(tmp_folder, self.f_occurrences)
+        self.f_emofs = os.path.join(tmp_folder, self.f_emofs)
         self.events.to_csv(self.f_events, index=False, sep="\t", encoding="utf-8")
         self.occurrences.to_csv(self.f_occurrences, index=False, sep="\t", encoding="utf-8")
         self.emofs.to_csv(self.f_emofs, index=False, sep="\t", encoding="utf-8")
@@ -355,6 +382,7 @@ class DarwinCoreArchive(LoggerSuperclass):
 
     def create_meta(self, filename, folder):
         # Now, let's create the XML metadata file
+        emof_uri = "http://rs.iobis.org/obis/terms/ExtendedMeasurementOrFact"  # accepted by biocheck tool
         meta_xml = f"""
         <archive xmlns="http://rs.tdwg.org/dwc/text/" metadata="eml.xml">
           <core encoding="UTF-8" fieldsTerminatedBy="\\t" linesTerminatedBy="\\n" fieldsEnclosedBy="" ignoreHeaderLines="1" rowType="http://rs.tdwg.org/dwc/terms/Event">
@@ -369,7 +397,7 @@ class DarwinCoreArchive(LoggerSuperclass):
             </files>
             <coreid index="0" />
           </extension>
-          <extension encoding="UTF-8" fieldsTerminatedBy="\\t" linesTerminatedBy="\\n" fieldsEnclosedBy="" ignoreHeaderLines="1" rowType="http://rs.iobis.org/obis/terms/ExtendedMeasurementOrFact">
+          <extension encoding="UTF-8" fieldsTerminatedBy="\\t" linesTerminatedBy="\\n" fieldsEnclosedBy="" ignoreHeaderLines="1" rowType="{emof_uri}">
             <files>
               <location>{os.path.basename(self.f_emofs)}</location>
             </files>
@@ -380,7 +408,7 @@ class DarwinCoreArchive(LoggerSuperclass):
         tree = etree.ElementTree(etree.fromstring(meta_xml))
         self.add_column_meta_xml(tree, self.events, "core","http://rs.tdwg.org/dwc/terms/Event")
         self.add_column_meta_xml(tree, self.occurrences, "extension", "http://rs.tdwg.org/dwc/terms/Occurrence")
-        self.add_column_meta_xml(tree, self.emofs, "extension", "http://rs.iobis.org/obis/terms/ExtendedMeasurementOrFact")
+        self.add_column_meta_xml(tree, self.emofs, "extension", emof_uri)
         meta_xml_file = os.path.join(folder, filename)
         self.info("Creating meta.xml file...")
         with open(meta_xml_file, "w") as f:
@@ -429,7 +457,7 @@ class DarwinCoreArchive(LoggerSuperclass):
 
         # Append alternateIdentifier
         # <alternateIdentifier>3470d506-e667-4e3f-b178-819669684c05</alternateIdentifier>
-        create_element(dataset, "title", text=conf["title"])
+        create_element(dataset, "title", text=self.title)
 
         people = {p["@people"]: p["role"] for p in conf["contacts"] if "@people" in p.keys()}
         organizations = [o["@organizations"] for o in conf["contacts"] if "@organizations" in o.keys()]
@@ -442,7 +470,7 @@ class DarwinCoreArchive(LoggerSuperclass):
             self.__add_metadata_provider(tree, o)
 
         now = datetime.datetime.now().strftime("%Y-%m-%d")
-        create_element(dataset, "datasetName", text=conf["title"])
+        create_element(dataset, "datasetName", text=self.title)
         create_element(dataset, "pubDate", text=now)
         create_element(dataset, "language", text="en")
         # Add abstract
@@ -454,6 +482,9 @@ class DarwinCoreArchive(LoggerSuperclass):
             if role == "PrincipalInvestigator":
                 self.__add_creator(tree, p, "contact")
                 break
+
+            elif role == "DataCurator":
+                self.contact_email = self.mc.get_document("people", p)["email"]
 
 
         # add CC-BY-4.0 license
@@ -482,6 +513,7 @@ class DarwinCoreArchive(LoggerSuperclass):
         org_full_name = self.mc.get_document("organizations", organizations[0])["fullName"]
         contact = create_element(dataset, "contact")
         create_element(contact,"organizationName", text=org_full_name)
+        create_element(contact, "electronicMailAddress", text=self.contact_email)
 
         meta_xml_file = os.path.join(folder, filename)
         self.info("Creating eml.xml file...")
@@ -517,6 +549,7 @@ class DarwinCoreArchive(LoggerSuperclass):
         create_element(creator, "electronicMailAddress", text=person["email"])
         if "orcid" in person.keys() and person["orcid"]:
             create_element(creator, "userId", attr="directory", attr_value="https://orcid.org/", text=person["orcid"])
+
 
     def __add_metadata_provider(self, tree, organization_id):
         """
