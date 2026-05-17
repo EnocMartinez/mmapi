@@ -515,17 +515,13 @@ __datasets = {
         "title": {"type": "string"},
         "summary": {"type": "string"},
         "processingLevel": {"type": "string", "enum": valid_dataset_levels},
-        # "keywords": {
-        #     "type": "array",
-        #     "items": {
-        #         "type": "object",
-        #         "properties": {
-        #             "label": {"type": "name"},
-        #             "uri": {"type": "name"}
-        #         },
-        #         "required": ["label", "label"]
-        #     }
-        # },
+        "keywords": {
+            "type": "array",
+            "minItems": 0,
+            "items": {
+                "type": "string"
+            }
+        },
         "@stations": {
             "type": "array",
             "minItems": 1,
