@@ -117,6 +117,8 @@ def main():
         # Generate the dataset for the selected services
         for service in args.services:
             assert service in valid_dataset_services, f"Service {service} not valid"
+            if service not in d["export"].keys():
+                continue
 
             # Generate all the resources
             for resource in d["export"][service]["resources"]:
@@ -131,7 +133,10 @@ def main():
                     start, end = ensure_last_dataset(mc, dataset_id, service, resource_id, start, end)
 
                 log.info(f"Generating dataset={dataset_id} service={service} resource={resource_id} start={start} end={end}")
-                generate_dataset(dataset_id, service, start, end, args.secrets, log,  overwrite=True, resources=[resource_id])
+                try:
+                    generate_dataset(dataset_id, service, start, end, args.secrets, log,  overwrite=True, resources=[resource_id])
+                except Exception as e:
+                    log.exception(e)
                     
 
 if __name__ == "__main__":
