@@ -1,7 +1,10 @@
 import datetime
+from datetime import timezone
 import logging
 import os
 from zipfile import ZipFile
+
+from emso_metadata_harmonizer.metadata import init_emso_metadata
 from lxml import etree
 import pandas as pd
 import requests
@@ -60,6 +63,9 @@ class DarwinCoreArchive(LoggerSuperclass):
 
         LoggerSuperclass.__init__(self, log, "DwC", colour=GRN)
         dataset_id = dataset["#id"]
+
+        self.time_start = time_start
+        self.time_end = time_end
 
         self.info("Making sure that we have just a dwca resource under the fileserver dataset")
 
@@ -433,6 +439,57 @@ class DarwinCoreArchive(LoggerSuperclass):
         else:
             return self.dwc_prefix + colname
 
+    def __add_contact(self, dataset: etree.Element, contacts: list):
+        curator = contacts["DataCurator"][0]
+        c = create_element(dataset, "contact")
+        i = create_element(c, "individualName")
+        create_element(i, "givenName", text=curator["givenName"])
+        create_element(i, "surName", text=curator["familyName"])
+        aff = self.mc.get_document("organizations", self.mc.get_affiliation(curator))
+        create_element(c, "organizationName", text=aff["fullName"])
+        create_element(c, "electronicMailAddress", text=curator["email"])
+
+    def __add_coverage(self, dataset):
+        coverage= create_element(dataset, "coverage")
+        geographic_coverage = create_element(coverage, "geographicCoverage")
+        description = create_element(geographic_coverage, "geographicDescription", text=f"Station {self.station_name} position")
+        bbox = create_element(geographic_coverage, "boundingCoordinates")
+        create_element(bbox, "westBoundingCoordinate", text=str(self.longitude))
+        create_element(bbox, "eastBoundingCoordinate", text=str(self.longitude))
+        create_element(bbox, "northBoundingCoordinate", text=str(self.latitude))
+        create_element(bbox, "southBoundingCoordinate", text=str(self.latitude))
+
+        temporal_coverage = create_element(coverage, "temporalCoverage")
+        range_of_dates = create_element(temporal_coverage, "rangeOfDates")
+        begin_date = create_element(range_of_dates, "beginDate")
+        create_element(begin_date, "calendarDate", text=self.time_start.strftime("%Y-%m-%d"))
+        end_date = create_element(range_of_dates, "endDate")
+        create_element(end_date, "calendarDate", text=self.time_end.strftime("%Y-%m-%d"))
+
+
+        for aphia_id in self.taxa_dict.values():
+            taxonomic_coverage = create_element(coverage, "taxonomicCoverage")
+            urn = f"urn:lsid:marinespecies.org:taxname:{aphia_id}"
+            gen_taxonomic_coverage = create_element(taxonomic_coverage, "generalTaxonomicCoverage", text=urn)
+            rank, value = self.__get_aphia_id_details(aphia_id)
+            t = create_element(taxonomic_coverage, "taxonomicClassification")
+            create_element(t, "taxonRankName", text=rank)
+            create_element(t, "taxonRankValue", text=value)
+
+    def __add_keywords(self, dataset):
+        emso = init_emso_metadata()
+        # Convert to keyword object
+        keywords = [emso.keywords.keyword_from_label(k) for k in self.dataset["keywords"]]
+        vocabularies, _ = emso.keywords.used_vocabularies(keywords)
+        for vocab in vocabularies:
+            keyword_set = create_element(dataset, "keywordSet")
+            for k in keywords:
+                if k.vocab_name == vocab:
+                    create_element(keyword_set, "keyword", text=k.name)
+
+            create_element(keyword_set, "keywordThesaurus", text=vocab)
+
+
 
     def create_eml(self, filename, folder):
 
@@ -459,61 +516,73 @@ class DarwinCoreArchive(LoggerSuperclass):
         # <alternateIdentifier>3470d506-e667-4e3f-b178-819669684c05</alternateIdentifier>
         create_element(dataset, "title", text=self.title)
 
-        people = {p["@people"]: p["role"] for p in conf["contacts"] if "@people" in p.keys()}
-        organizations = [o["@organizations"] for o in conf["contacts"] if "@organizations" in o.keys()]
+        contacts = self.mc.group_contacts_by_role(self.dataset, orgs=False)
+        all_contacts = self.mc.group_contacts_by_role(self.dataset, orgs=True)
+        all_people = []
+        for role, people in contacts.items():
+            all_people += people
+        assert "ProjectLeader" in contacts.keys(), f"No ProjectLeader found!"
+        assert "DataCurator" in contacts.keys(), f"No DataCurator found!"
+        assert "RightsHolder" in all_contacts.keys(), f"No RightsHolder found!"
 
+        organization = all_contacts["RightsHolder"][0]
+        authors = []
+        for p in self.dataset["contacts"]:
+            # Add all people as authors
+            try:
+                doc = self.mc.get_document("people", p["@people"])
+                authors.append(doc["name"])
+            except (KeyError, LookupError):
+                continue
+            self.__add_creator(tree, doc, "creator")
 
-        for p in people.keys():
-            self.__add_creator(tree, p, "creator")
-
-        for o in organizations:
-            self.__add_metadata_provider(tree, o)
+        self.__add_metadata_provider(tree, all_contacts["RightsHolder"][0])
 
         now = datetime.datetime.now().strftime("%Y-%m-%d")
-        create_element(dataset, "datasetName", text=self.title)
         create_element(dataset, "pubDate", text=now)
         create_element(dataset, "language", text="en")
+
         # Add abstract
         abstract = create_element(dataset, "abstract")
         create_element(abstract, "para", text=conf["summary"])
 
-        # contact
-        for p, role in people.items():
-            if role == "PrincipalInvestigator":
-                self.__add_creator(tree, p, "contact")
-                break
-
-            elif role == "DataCurator":
-                self.contact_email = self.mc.get_document("people", p)["email"]
-
+        # Add keywords
+        self.__add_keywords(dataset)
 
         # add CC-BY-4.0 license
         text = """This work is licensed under a <ulink url="http://creativecommons.org/licenses/by/4.0/legalcode"><citetitle>Creative Commons Attribution (CC-BY) 4.0 License</citetitle></ulink>."""
         ip = create_element(dataset, "intellectualRights")
         create_element(ip, "para", text=text)
 
-        coverage= create_element(dataset, "coverage")
-        geographic_coverage = create_element(coverage, "geographicCoverage")
-        description = create_element(geographic_coverage, "geographicDescription", text=f"Station {self.station_name} position")
-        bbox = create_element(geographic_coverage, "boundingCoordinates")
-        create_element(bbox, "westBoundingCoordinate", text=str(self.longitude))
-        create_element(bbox, "eastBoundingCoordinate", text=str(self.longitude))
-        create_element(bbox, "northBoundingCoordinate", text=str(self.latitude))
-        create_element(bbox, "southBoundingCoordinate", text=str(self.latitude))
-        for aphia_id in self.taxa_dict.values():
-            taxonomic_coverage = create_element(coverage, "taxonomicCoverage")
-            urn = f"urn:lsid:marinespecies.org:taxname:{aphia_id}"
-            gen_taxonomic_coverage = create_element(taxonomic_coverage, "generalTaxonomicCoverage", text=urn)
-            rank, value = self.__get_aphia_id_details(aphia_id)
-            t = create_element(taxonomic_coverage, "taxonomicClassification")
-            create_element(t, "taxonRankName", text=rank)
-            create_element(t, "taxonRankValue", text=value)
+        self.__add_coverage(dataset)
+
+        # Add acknowledgements if present in the dataset config
+        try:
+            acks_text = self.dataset["funding"]["acknowledgements"]
+            acks = create_element(dataset, "acknowledgements")
+            create_element(acks, "para", text=acks_text)
+        except KeyError:
+            pass
+
+        self.__add_contact(dataset, contacts)
 
 
-        org_full_name = self.mc.get_document("organizations", organizations[0])["fullName"]
-        contact = create_element(dataset, "contact")
-        create_element(contact,"organizationName", text=org_full_name)
-        create_element(contact, "electronicMailAddress", text=self.contact_email)
+        curator = contacts["DataCurator"][0]  # pick the first one as contact
+        self.contact_email = curator["email"]
+
+        add = create_element(tree.getroot(), "additionalMetadata" )
+        meta = create_element(add, "metadata")
+        gbif = create_element(meta, "gbif")
+        utc = timezone.utc
+        create_element(gbif, "dateStamp", text=datetime.datetime.now(utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        create_element(gbif, "hierarchyLevel", text="dataset")
+
+        authors = ", ".join(authors)
+        title = self.dataset["title"]
+
+        citation = authors + ". " + title + ". Occurrence dataset"
+
+        create_element(gbif, "citation", text=citation)
 
         meta_xml_file = os.path.join(folder, filename)
         self.info("Creating eml.xml file...")
@@ -525,7 +594,7 @@ class DarwinCoreArchive(LoggerSuperclass):
         return str(meta_xml_file)
 
 
-    def __add_creator(self, tree, people_id, key):
+    def __add_creator(self, tree, person, key):
         """
         Add creator metadata, like:
             <creator>
@@ -536,7 +605,6 @@ class DarwinCoreArchive(LoggerSuperclass):
               <userId directory="https://orcid.org/">0000-0003-1233-7105</userId>
             </creator>
         """
-        person = self.mc.get_document("people", people_id)
         dataset = get_element(tree, "dataset")
         creator = create_element(dataset, key)
         individual_name = create_element(creator, "individualName")
@@ -551,7 +619,7 @@ class DarwinCoreArchive(LoggerSuperclass):
             create_element(creator, "userId", attr="directory", attr_value="https://orcid.org/", text=person["orcid"])
 
 
-    def __add_metadata_provider(self, tree, organization_id):
+    def __add_metadata_provider(self, tree, organization):
         """
         <metadataProvider>
             <organizationName>Flanders Marine Institute (VLIZ)</organizationName>
@@ -566,7 +634,6 @@ class DarwinCoreArchive(LoggerSuperclass):
         :param organization_id:
         :return:
         """
-        organization = self.mc.get_document("organizations", organization_id)
         dataset = get_element(tree, "dataset")
         provider = create_element(dataset, "metadataProvider")
         create_element(provider, "organizationName", organization["fullName"])

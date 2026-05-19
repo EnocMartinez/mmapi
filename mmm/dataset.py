@@ -162,7 +162,7 @@ class DatasetObject(LoggerSuperclass):
 
         # configure erddap using the emso_metadata_harmonizer tool
         self.info(f"Integrating {self.filename} into {dataset_path}")
-        erddap_config(self.filename, self.erddap_dataset_id, dataset_path, datasets_xml_file=datasets_xml)
+        erddap_config(self.filename, self.erddap_dataset_id, dataset_path, datasets_xml_file=datasets_xml, recursive=True)
         self.erddap_configured = True
 
     def configure_erddap_remotely(self, datasets_xml, big_parent_directory="", erddap_uid=None, erddap_datasets_path="/datasets"):

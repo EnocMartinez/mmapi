@@ -588,7 +588,8 @@ __datasets = {
                 "@projects": {
                     "type": "array",
                     "items": {"type": "string"}
-                }
+                },
+                "acknowledgements": {"type": "string"}
             },
             "required": ["@projects"]
         }

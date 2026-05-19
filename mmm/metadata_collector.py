@@ -1299,6 +1299,36 @@ class MetadataCollector(LoggerSuperclass):
 
         return self.__taxa_aphia_dict
 
+    def group_contacts_by_role(self, doc: dict, orgs=False):
+        """
+        Group contacts by role
+
+        :param doc: doc to scan for contacts
+        :param orgs: Include organizations
+        :return: {"role1": [{doc1}, {doc2}]}
+        """
+
+        assert "contacts" in doc.keys()
+
+        people = {p["@people"]: p["role"] for p in doc["contacts"] if "@people" in p.keys()}
+        organizations = {o["@organizations"]: o["role"] for o in doc["contacts"] if "@organizations" in o.keys()}
+
+        group = {}
+        for doc_id, role in people.items():
+            if role not in group.keys():
+                group[role] = []
+            group[role].append(self.get_document("people", doc_id))
+
+        if orgs:
+            for doc_id, role in organizations.items():
+                if role not in group.keys():
+                    group[role] = []
+                group[role].append(self.get_document("organizations", doc_id))
+
+        return group
+
+
+
 
 def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
     return mc.get_station_deployments(station)
@@ -1322,3 +1352,6 @@ def get_station_coordinates(mc: MetadataCollector, station: any, timestamp=None)
 
 def get_station_history(mc: MetadataCollector, name: str) -> list:
     return mc.get_station_history(name)
+
+
+
