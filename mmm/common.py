@@ -615,3 +615,21 @@ def str_to_timerange(str_time_range):
         raise ValueError("End time must be greater than start time")
 
     return start, end
+
+
+def process_time_range(tr: str):
+    """
+    Converts a time range string (e.g. "2024-01-01/2025-01-01") to tuple of pd.Timestamp. If string is empty return
+    (None, None) tuple
+    :param tr: str
+    :return: start, end (pd.Timestamp, pd.Timestamp)
+    """
+    assert_types(tr, [str, type(None)])
+    if not tr:
+        return (None, None)
+
+    start, end = tr.split("/")
+    start = pd.Timestamp(start)
+    end = pd.Timestamp(end)
+    assert start <= end, f"start is greater than end!  ({start} < {end})"
+    return start, end

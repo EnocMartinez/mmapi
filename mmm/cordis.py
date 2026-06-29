@@ -9,14 +9,12 @@ license: MIT
 created: 3/10/23
 """
 
-
-
 import os.path
 import lxml.etree as etree
 import rich
 import requests
 from .xmlutils import get_elements, get_element, get_element_text
-from .metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
+from mmm.metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
 
 # Harcoded acronyms that are usually missing in CORDIS
 hardcoded_acronyms = {

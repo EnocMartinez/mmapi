@@ -318,12 +318,15 @@ class CkanClient(LoggerSuperclass):
 
         # Now check if we have an object with the same id
         if obj["id"] not in registered_ids:
+            self.debug(f"Object {obj['id']} does not exist")
             return False, False  # object does not exist!
 
         # Now we know that the object exists, let's figure out if it needs to be updated
         if updated_required(registered, obj):
+            self.debug(f"Object {obj['id']} exists, but needs to be updated")
             return True, True  # Object exists and requires an update
         else:
+            self.debug(f"Object {obj['id']} does not exists")
             return True, False # Object exists, no update required
 
     def object_create_or_update(self, obj_type, obj):
@@ -343,7 +346,7 @@ class CkanClient(LoggerSuperclass):
 
         elif exists and update:
             self.info(f"UPDATE existing object '{obj_type}'  with id='{obj_id}'")
-            url = self.url + obj_type + "_create"
+            url = self.url + obj_type + "_patch"
             return self.ckan_patch(url, obj)
 
         elif exists and not update:
@@ -462,8 +465,10 @@ class CkanClient(LoggerSuperclass):
         data = json.dumps(data)
         #headers['Content-Type'] = "application/x-www-form-urlencoded"
         headers['Content-Type'] = "application/json"
-        resp = requests.post(url + f"?id={identifier}", data=data, headers=headers)
+        u = url + f"?id={identifier}"
+        resp = requests.patch(u, data=data, headers=headers)
         if resp.status_code > 300:
+            self.info(f"Failed (code {int(resp.status_code)}) PATCH to {u}")
             self.info(f"[red]{resp.text}")
             self.error(f"{resp.text}", exception=ValueError)
         response = json.loads(resp.text)["result"]

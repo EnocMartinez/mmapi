@@ -10,6 +10,18 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 27/01/2026
 """
+
+
+import os
+import sys
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# Get the parent directory (project root)
+parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
+
+# Add the parent directory to the sys.path
+sys.path.insert(0, parent_dir)
+
+
 from argparse import ArgumentParser
 
 from mmm.aei import aei_project

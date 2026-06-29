@@ -78,7 +78,7 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, log: log
                 # created, updated or ignored (if it already exists)
                 ckan.organization_create(organization_id, name, title, extras=extras, image_url=image_url)
             else:
-                log.warning(f"ignoring private organization {name}...")
+                log.debug(f"ignoring private organization {name}...")
 
     # CKAN Projects
     log.info("Propagating groups to CKAN")

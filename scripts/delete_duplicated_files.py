@@ -7,8 +7,6 @@ import rich
 import os
 import sys
 import yaml
-from cloudinit.distros import fetch
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # Get the parent directory (project root)
 parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))

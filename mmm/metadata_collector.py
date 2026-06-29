@@ -378,7 +378,9 @@ class MetadataCollector(LoggerSuperclass):
         """
         # first check that the doc's #id is not already registered
 
-        if not author:
+        try:
+            author = document["#author"]
+        except KeyError:
             author = self.default_author
 
         if collection not in self.collection_names:
@@ -494,7 +496,9 @@ class MetadataCollector(LoggerSuperclass):
         if document["#id"] != document_id:
             raise ValueError("Document #id does not match with parameter id")
 
-        if not author:
+        try:
+            author = document["#author"]
+        except KeyError:
             author = self.default_author
 
         old_document = self.get_document(collection, document_id)  # getting old metadata

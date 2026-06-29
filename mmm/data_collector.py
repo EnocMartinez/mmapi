@@ -551,6 +551,8 @@ class DataCollector(LoggerSuperclass):
             query = f"""
                 select
                     "OBSERVATIONS"."PHENOMENON_TIME_START" as timestamp,                    
+                    "OBSERVATIONS"."PHENOMENON_TIME_END" as time_end,
+                    "OBSERVATIONS"."RESULT_TIME" as result_time,
                     "PARAMETERS"->'depth' as depth,
                     "OBSERVATIONS"."{result_column}" as value,
                     "OBSERVATIONS"."RESULT_QUALITY"->>'qc_flag' as qc_flag,
@@ -696,7 +698,6 @@ class DataCollector(LoggerSuperclass):
         df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, tstart=time_start, tend=time_end)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
         df = df[["timestamp", "depth", "latitude", "longitude", "sensor_id", "platform_id", "value", "variable", "foi"]]
-
         df = pivot_dataframe(df, pivot_cols=["value"])
 
         if keep_foi:
