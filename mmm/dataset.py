@@ -130,14 +130,14 @@ class DatasetObject(LoggerSuperclass):
         self.debug(f"   tstart = {self.tstart}")
         self.debug(f"   tend = {self.tend}")
 
-        if self.service_name == "fileserver":
-            path = self.fileserver.url2path(self.url)
-        else:
-            path = ""  # for other services datasets are not reachable directly via URL
+        # if self.service_name == "fileserver":
+        #     path = self.fileserver.url2path(self.url)
+        # else:
+        #     path = ""  # for other services datasets are not reachable directly via URL
 
         host = self.resource["host"]
         self.mc.dataset_register(self.dataset_id, self.resource_id, self.service_name, self.fmt, self.tstart,
-                                 self.tend, self.url, path, host)
+                                 self.tend, self.url, self.exporter.remote_file, host)
         return path_or_url
 
     def configure_erddap(self, datasets_xml, dataset_path):
@@ -261,6 +261,7 @@ class DataExporter(LoggerSuperclass):
         self.period = conf["period"]
         self.host = conf["host"]
         self.fmt = conf["format"]
+        self.remote_file = ""
 
         self.fileserver = fileserver
 
@@ -299,6 +300,9 @@ class DataExporter(LoggerSuperclass):
         else:
             self.debug(f"Using standalone send_file")
             result = send_file(filename, path, self.host)
+
+        # Store the remote file path
+        self.remote_file = os.path.join(path, os.path.basename(filename))
         return result
 
     @staticmethod

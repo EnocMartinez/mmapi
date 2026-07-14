@@ -179,7 +179,7 @@ __project_types__ = [
     "other"
 ]
 
-__partnership_types__ = ["coordinator", "participant", "thirdParty", "other", "associatedPartner"]
+__partnership_types__ = ["coordinator", "participant", "thirdParty", "other", "associatedPartner", "relatedOrganization"]
 
 
 
@@ -468,6 +468,22 @@ erddap_resource = {
     "required": ["id", "path", "host", "period", "format", "dataType"]
 }
 
+zenodo_resource = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "definition": "ID to be assigned to the resource"},
+        "link": {"type": "string", "definition": "link pointing to the online resource"},
+        "format": { "type": "string", "enum": dataset_exporter_formats},
+        "access_right": {
+            "type": "string",
+            "enum": ["open", "embargoed", "restricted", "closed"],
+        },
+        "license": { "type": "string", "default": "cc-by-4.0" },
+        "publish": {"type": "boolean", "default": False }
+    },
+    "required": ["id", "link", "access_right"]
+}
+
 fileserver_exporter_conf = {
     "type": "object",
     "properties": {
@@ -504,8 +520,22 @@ ckan_exporter_conf = {
     "required": ["resources"]
 }
 
+zenodo_exporter_conf = {
+    "type": "object",
+    "properties": {
+        "resources": {
+            "type": "array",
+            "minItems": 1,
+            "items": zenodo_resource
+        },
+        "readme": {"type": "string"},
+    },
+    "required": ["resources", "readme"]
+}
+
+
 # Dataset services supported by MMAPI
-valid_dataset_services = ["fileserver", "erddap", "ckan"]
+valid_dataset_services = ["fileserver", "erddap", "ckan", "zenodo"]
 valid_dataset_levels = ["L0", "L1", "L2", "L3"]
 
 __datasets = {
@@ -577,7 +607,8 @@ __datasets = {
             "properties": {
                 "fileserver": fileserver_exporter_conf,
                 "ckan": ckan_exporter_conf,
-                "erddap": erddap_exporter_conf
+                "erddap": erddap_exporter_conf,
+                "zenodo": zenodo_exporter_conf
             },
             "required": []
         },

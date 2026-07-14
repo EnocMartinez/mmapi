@@ -29,7 +29,7 @@ import os
 
 def generate_dataset(dataset_id: str, service_name: str, time_start: pd.Timestamp, time_end: pd.Timestamp, secrets,
                      log: logging.Logger, format:str= "", verbose=False, erddap_config=False, overwrite=False,
-                     resources=[], local=False):
+                     resources=[], local=False, publish=False):
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -54,7 +54,7 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: pd.Timestam
     dc = DataCollector(secrets, log, mc=mc)
 
     dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, secrets=secrets,
-                        overwrite=overwrite, erddap_config=erddap_config, resources=resources, local=local)
+                        overwrite=overwrite, erddap_config=erddap_config, resources=resources, local=local, publish=publish)
 
 def list_datasets(secrets, verbose=False):
     with open(secrets) as f:
@@ -92,6 +92,9 @@ if __name__ == "__main__":
     argparser.add_argument("-f", "--format",type=str,  required=False, default="",
                            help="Suggest format such as netcdf, csv, etc. May not work for all datasets")
 
+    argparser.add_argument("-P", "--publish", help="For Zenodo datasets, publish it and get the DOI", action="store_true")
+
+
     args = argparser.parse_args()
 
     deliver = True
@@ -118,4 +121,4 @@ if __name__ == "__main__":
     for service in args.services:
         generate_dataset(args.dataset_id, service, tstart, tend, args.secrets, log, format=args.format,
                          verbose=args.verbose, erddap_config=args.erddap, overwrite=args.overwrite,
-                         resources=args.resources, local=args.local)
+                         resources=args.resources, local=args.local, publish=args.publish)

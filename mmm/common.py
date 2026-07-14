@@ -17,6 +17,8 @@ import rich
 import requests
 import subprocess
 import socket
+import hashlib
+import netCDF4
 
 # Color codes
 GRN = "\x1B[32m"
@@ -633,3 +635,90 @@ def process_time_range(tr: str):
     end = pd.Timestamp(end)
     assert start <= end, f"start is greater than end!  ({start} < {end})"
     return start, end
+
+
+def get_linked_resource_conf( dataset_conf: dict, link: str):
+    """
+    In a linked dataset to $fileserver, get the configuration
+    :param dataset_conf:
+    :param link:
+    :return:
+    """
+    logger = logging.getLogger()
+    service, resource_id = link[1:].split("/")  # skip $
+    fileserver_conf = {}
+    for fileserver_resource in dataset_conf["export"]["fileserver"]["resources"]:
+        if fileserver_resource["id"] == resource_id:
+            fileserver_conf = fileserver_resource
+            break
+
+    if not fileserver_conf:
+        logger.error(f"Fileserver conf {link} not found!")
+        raise LookupError(f"Fileserver conf {link} not found!")
+
+    return fileserver_conf, service
+
+
+def human_readable_bytes(num_bytes: int) -> str:
+    """
+    Convert a byte count to a human-readable string with SI units.
+
+    Args:
+        num_bytes: Number of bytes (non-negative integer).
+
+    Returns:
+        A string like "10.4 MB" or "321.5 kB".
+
+    Examples:
+        >>> human_readable_bytes(10000000)
+        '10.0 MB'
+        >>> human_readable_bytes(321456)
+        '321.5 kB'
+        >>> human_readable_bytes(1123123123)
+        '1.1 GB'
+        >>> human_readable_bytes(0)
+        '0 B'
+    """
+    if num_bytes < 0:
+        raise ValueError("Number of bytes must be non-negative")
+
+    units = ["B", "kB", "MB", "GB", "TB"]   # extend if needed (PB, etc.)
+    unit_index = 0
+    value = float(num_bytes)
+
+    # Move up to the next unit while the value is >= 1000 and we have more units.
+    while value >= 1000 and unit_index < len(units) - 1:
+        value /= 1000.0
+        unit_index += 1
+
+    # If the value is exactly an integer, we could show no decimals, but the spec asks for one decimal.
+    return f"{value:.1f} {units[unit_index]}"
+
+
+def get_file_md5(filename):
+    md5_hash = hashlib.md5()
+    with open(filename, 'rb') as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            md5_hash.update(chunk)
+
+    return md5_hash.hexdigest()
+
+
+
+def extract_netcdf_metadata(file_path: str) -> dict:
+    """
+    Opens a NetCDF file, extracts global and variable metadata,
+    and closes the file immediately. Does not load any array data.
+    """
+    metadata = {}
+    with netCDF4.Dataset(file_path, mode='r') as ds:
+        # Extract global attributes efficiently
+        metadata["global"] = {attr: ds.getncattr(attr) for attr in ds.ncattrs()}
+
+        # Build the vocabulary dictionary for all variables
+        metadata["variables"] = {
+            var_name: {attr: var.getncattr(attr) for attr in var.ncattrs()}
+            for var_name, var in ds.variables.items()
+        }
+
+    return metadata

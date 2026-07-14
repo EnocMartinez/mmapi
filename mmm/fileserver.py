@@ -14,7 +14,7 @@ import os
 import shutil
 import socket
 import numpy as np
-from .common import run_subprocess, LoggerSuperclass, BLU, run_over_ssh
+from .common import run_subprocess, LoggerSuperclass, BLU, run_over_ssh, assert_type
 from .parallelism import threadify
 
 
@@ -215,3 +215,14 @@ def send_file(src_file: str, dest_folder: str, host: str, dry_run=False) -> str:
             # Run rsync process
             run_subprocess(["rsync", src_file, f"{host}:{dest_file}"])
     return dest_file
+
+
+def get_file(host, remote_file, destination):
+    assert_type(host, str)
+    assert_type(remote_file, str)
+    assert_type(destination, str)
+
+    if os.uname().nodename == host or host == "localhost":
+        shutil.copy2(remote_file, destination)
+    else:
+        run_subprocess(["scp", f"{host}:{remote_file} {destination}"])

@@ -33,6 +33,7 @@ from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
 from mmm.dataset import DatasetObject
 from mmm.schemas import dataset_exporter_formats, valid_dataset_services, mmapi_data_types
+from .zenodo import ZenodoClient
 
 
 def init_data_collector(secrets: dict, log: logging.Logger, mc: MetadataCollector = None,
@@ -69,6 +70,12 @@ class DataCollector(LoggerSuperclass):
             self.ckan = None
 
         self.emso = None  # by default, do not initialize emso metadata
+
+        try:
+            self.zenodo = ZenodoClient(self.mc, secrets, self.fileserver, log)
+        except KeyError as e:
+            self.warning(f"Could not initialize Zenodo: {e.__repr__()}")
+            self.zenodo = None
 
     def dataset_filename(self, dataset: dict, fmt: str, tstart: pd.Timestamp, tend: pd.Timestamp,
                          tmp_folder="temp") -> str:
@@ -234,7 +241,7 @@ class DataCollector(LoggerSuperclass):
 
     def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str = "",
                          time_end: pd.Timestamp|str = "", fmt: str = "", overwrite=False, erddap_config=False,
-                         secrets: dict=None, resources: dict = None, local=False) -> List[DatasetObject,]:
+                         secrets: dict=None, resources: dict = None, local=False, publish=False) -> List[DatasetObject,]:
         """
 
         :param dataset: dataset_id or dataset configuration dict
@@ -274,6 +281,12 @@ class DataCollector(LoggerSuperclass):
             if not self.ckan:
                 self.error("CKAN not initialized!", exception=ValueError)
             return self.ckan.process_mmapi_dataset(conf, resources=resources)
+
+        elif service_name == "zenodo":
+            if not self.zenodo:
+                self.error("Zenodo not initialized!", exception=ValueError)
+
+            return self.zenodo.process_mmapi_dataset(conf, resources=resources, publish=publish)
 
         datasets = []
         for resource in conf["export"][service_name]["resources"]:

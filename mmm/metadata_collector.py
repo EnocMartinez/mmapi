@@ -11,12 +11,12 @@ created: 30/11/22
 """
 import logging
 import time
-from typing import Tuple
+from typing import Tuple, List
 
 import jsonschema
 from numpy.core.defchararray import upper
 
-from mmm.data_sources.postgresql import PgDatabaseConnector
+from mmm.data_sources.postgresql import PgDatabaseConnector, sql_list
 import datetime
 import json
 import pandas as pd
@@ -1232,11 +1232,15 @@ class MetadataCollector(LoggerSuperclass):
         history = sorted(history, key=lambda x: x['time'])
         return history
 
-    def dataset_register(self, dataset_id: str, resource_id: str, service: str, fmt: str, data_from: pd.Timestamp,
-                         data_to: pd.Timestamp, url: str, path: str, host: str):
+    def dataset_register(self, dataset_id: str, resource_id: str, service: str, fmt: str,
+                         data_from: pd.Timestamp, data_to: pd.Timestamp, url: str, path: str,
+                         host: str, doi: str = "", zenodo_record: str = ""):
         """
-        Register a dataset into the fileserver_dataset_registry. If no entry exists insert it, otherwise update it
+        Register a dataset into the fileserver_dataset_registry.
+        If no entry exists, insert it; otherwise update it.
+        Empty strings for optional fields become NULL in the database.
         """
+        # Type assertions (kept as-is)
         assert_type(dataset_id, str)
         assert_type(resource_id, str)
         assert_type(service, str)
@@ -1246,34 +1250,71 @@ class MetadataCollector(LoggerSuperclass):
         assert_type(url, str)
         assert_type(path, str)
         assert_type(host, str)
+        assert_type(doi, str)
+        assert_type(zenodo_record, str)
 
-        now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Helper: convert empty string to None (which becomes NULL in SQL)
+        def empty_to_none(value):
+            return None if value == "" else value
+
+        now = pd.Timestamp.now(tz="UTC")
+
         self.debug(f"Registering dataset {dataset_id} {resource_id} {service}{fmt} {data_from} {data_to}")
 
         table_entry_exists = self.dataset_resource_exists(dataset_id, resource_id, service, fmt, data_from, data_to)
 
-        # We did not update anything in the table! This means that we need to insert it
-        if not table_entry_exists:  # Create new registry
-            self.info(f"CREATE dataset registry for dataset_id='{dataset_id}' and resource_id='{resource_id}'")
-            creation_date = now
-            modification_date = now
+        if not table_entry_exists:  # INSERT
+            self.info(
+                f"CREATE dataset registry for dataset_id='{dataset_id}' and resource_id='{resource_id}' and service='{service}")
             query = f"""
-                INSERT INTO {self.dataset_registry_table} 
-                (dataset_id, resource_id, service, format, data_from, data_to, creation_date, modification_date, url, path, host) 
-                VALUES ('{dataset_id}','{resource_id}','{service}','{fmt}','{data_from}','{data_to}','{creation_date}',
-                        '{modification_date}','{url}','{path}','{host}');
-                """
-            self.db.exec_query(query, fetch=False)
+                INSERT INTO {self.dataset_registry_table}
+                (dataset_id, resource_id, service, format, data_from, data_to,
+                 creation_date, modification_date, url, path, host, doi, zenodo_record)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            params = (
+                dataset_id,
+                resource_id,
+                service,
+                fmt,
+                data_from,  # psycopg2 handles Timestamp
+                data_to,
+                now,  # creation_date
+                now,  # modification_date
+                empty_to_none(url),
+                empty_to_none(path),
+                empty_to_none(host),
+                empty_to_none(doi),
+                empty_to_none(zenodo_record)
+            )
+            self.db.exec_query((query,params), fetch=False)
 
-        else:  # update existing entry
+        else:  # UPDATE
             self.info(f"UPDATE dataset registry for dataset_id='{dataset_id}' and resource_id='{resource_id}'")
-            query = f"""        
+            query = f"""
                 UPDATE {self.dataset_registry_table}
-                SET modification_date = '{now}', path = '{path}',  url = '{url}', host = '{host}'
-                WHERE
-                 dataset_id='{dataset_id}' and resource_id='{resource_id}' and data_from='{data_from}' and data_to='{data_to}'
-            ;"""
-            self.db.exec_query(query, fetch=False)
+                SET modification_date = %s,
+                    path = %s,
+                    url = %s,
+                    host = %s
+                WHERE dataset_id = %s
+                  AND resource_id = %s
+                  AND service = %s
+                  AND data_from = %s
+                  AND data_to = %s
+            """
+            params = (
+                now,  # modification_date
+                empty_to_none(path),  # path
+                empty_to_none(url),  # url
+                empty_to_none(host),  # host
+                dataset_id,  # WHERE condition
+                resource_id,
+                service,
+                data_from,
+                data_to
+            )
+            self.db.exec_query((query, params), fetch=False)
 
     def dataset_resource_exists(self, dataset_id: str, resource_id: str, service: str, fmt: str,
                                 data_from: pd.Timestamp,
@@ -1290,6 +1331,67 @@ class MetadataCollector(LoggerSuperclass):
                     and data_to='{data_to}'                    
             );"""
         return self.db.value_from_query(query)
+
+    def update_zenodo_record(self, dataset_id: str, resource_id: str, service: str, data_from: List[pd.Timestamp], data_to: List[pd.Timestamp], zenodo_record: str):
+        assert_type(dataset_id, str)
+        assert_type(resource_id, str)
+        assert_type(service, str)
+        assert_type(data_from, list)
+        assert_type(data_to, list)
+        [assert_type(t, pd.Timestamp) for t in data_from]
+        [assert_type(t, pd.Timestamp) for t in data_from]
+        assert_type(zenodo_record, str)
+
+        now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        data_from = [t.strftime("%Y-%m-%dT%H:%M:%SZ") for t in data_from]
+        data_to = [t.strftime("%Y-%m-%dT%H:%M:%SZ") for t in data_to]
+        self.info(f"UPDATE zenodo_record='{zenodo_record}'for dataset_id='{dataset_id}' and resource_id='{resource_id}' from {data_from} to {data_to}")
+
+        query = f"""         
+            UPDATE {self.dataset_registry_table}
+            SET modification_date = '{now}', zenodo_record='{zenodo_record}' 
+            WHERE
+             dataset_id='{dataset_id}' and 
+             resource_id='{resource_id}' and 
+             service='{service}' and 
+             data_from in {sql_list(data_from)} and 
+             data_to in {sql_list(data_to)}
+            ;"""
+
+        self.db.exec_query(query, fetch=False)
+
+
+    def update_doi(self, dataset_id: str, resource_id: str, service: str, data_from: List[pd.Timestamp], data_to: List[pd.Timestamp], doi: str):
+        assert_type(dataset_id, str)
+        assert_type(resource_id, str)
+        assert_type(service, str)
+        assert_type(data_from, list)
+        assert_type(data_to, list)
+        [assert_type(t, pd.Timestamp) for t in data_from]
+        [assert_type(t, pd.Timestamp) for t in data_from]
+        assert_type(doi, str)
+
+        assert doi, f"Invalid DOI: '{doi}'"
+
+        now = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        data_from = [t.strftime("%Y-%m-%dT%H:%M:%SZ") for t in data_from]
+        data_to = [t.strftime("%Y-%m-%dT%H:%M:%SZ") for t in data_to]
+        self.info(f"UPDATE DOI='{doi}'for dataset_id='{dataset_id}' and resource_id='{resource_id}' ")
+
+        query = f"""         
+            UPDATE {self.dataset_registry_table}
+            SET modification_date = '{now}', doi='{doi}' 
+            WHERE
+             dataset_id='{dataset_id}' and 
+             resource_id='{resource_id}' and 
+             service='{service}' and 
+             data_from in {sql_list(data_from)} and 
+             data_to in {sql_list(data_to)}
+            ;"""
+        self.db.exec_query(query, fetch=False)
+
 
     def get_taxa_aphia_dict(self):
         """

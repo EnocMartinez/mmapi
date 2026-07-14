@@ -13,7 +13,7 @@ import traceback
 import requests
 import json
 from mmm.common import normalize_string, LoggerSuperclass, PRL, assert_type, download_file, run_over_ssh, check_url, \
-    file_list, assert_types, RST, BLU, WHT, CYN
+    file_list, assert_types, RST, BLU, WHT, CYN, get_linked_resource_conf
 from mmm.fileserver import FileServer
 from mmm import MetadataCollector
 from PIL import Image
@@ -514,7 +514,8 @@ class CkanClient(LoggerSuperclass):
             resource_id = resource["id"]
             # Process dynamically-linked resources hosted in FileServer
             if resource["link"].startswith("$fileserver"):
-                fileserver_resource = self.get_linked_resource_conf(dataset_conf, resource["link"])
+                fileserver_resource, service = get_linked_resource_conf(dataset_conf, resource["link"])
+                assert service == "fileserver", f"Expected fileserver in linked resource {resource['link']}"
                 fileserver_resource_id = fileserver_resource['id']
                 #   fmt = fileserver_resource["format"]
                 query =  f"""
@@ -639,21 +640,3 @@ class CkanClient(LoggerSuperclass):
         url = self.url + "resource_view_create"
         return self.ckan_post(url, data)
 
-    def get_linked_resource_conf(self, dataset_conf: dict, link: str):
-        """
-        In a linked dataset to $fileserver, get the configuration
-        :param dataset_conf:
-        :param link:
-        :return:
-        """
-        resource_id = link.split("/")[1]  # skip $
-        fileserver_conf = {}
-        for fileserver_resource in dataset_conf["export"]["fileserver"]["resources"]:
-            if fileserver_resource["id"] == resource_id:
-                fileserver_conf = fileserver_resource
-                break
-
-        if not fileserver_conf:
-            self.error(f"Fileserver conf {link} not found!", exception=LookupError)
-
-        return fileserver_conf
