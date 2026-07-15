@@ -10,6 +10,7 @@ mmm_metadata = {
         "#creationDate": {"type": "string"},
         "#modificationDate": {"type": "string"},
         "#author": {"type": "string"},
+        "#group": {"type": "string", "description": "if set, the document will be created in a subfolder"},
     },
     "required": ["#id", "#version", "#creationDate", "#modificationDate", "#author"]
 }

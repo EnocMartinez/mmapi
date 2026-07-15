@@ -131,18 +131,24 @@ def file_list(dir_name) -> list:
     return all_files
 
 
-def dir_list(dir_name) -> list:
+def dir_list(dir_name, include_files=True) -> list:
     """ create a list of file and sub directories names in the given directory"""
     assert os.path.isdir(dir_name), f"{dir_name} is not a directory!"
     sublist = os.listdir(dir_name)
     all_files = list()  # all files and folders
     for entry in sublist:
         full_path = os.path.join(dir_name, entry)
-        all_files.append(full_path)
-        if os.path.isfile(entry):
-            continue
-        if os.path.isdir(full_path):
-            all_files = all_files + dir_list(full_path)
+        if os.path.isfile(full_path):
+            if include_files:
+                all_files.append(full_path)
+
+        elif os.path.isdir(full_path):
+            all_files.append(full_path)
+            all_files = all_files + dir_list(full_path, include_files=include_files)
+
+        else:
+            raise ValueError(f"Not a file nor a dir! '{full_path}'")
+
     all_files = list(reversed(all_files))
     return all_files
 

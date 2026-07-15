@@ -12,7 +12,7 @@ created: 21/09/2023
 from argparse import ArgumentParser, ArgumentError
 
 from mmm import setup_log
-from mmm.common import ask_user_input
+from mmm.common import ask_user_input, dir_list, file_list
 from mmm.metadata_collector import MetadataCollector, init_metadata_collector
 import yaml
 import rich
@@ -55,12 +55,14 @@ def load_from_filesystem(folder, subset=[], history=False):
     :return: dictionary with all data
     """
     fs_data = {}
-    folders = [os.path.join(folder, f) for f in os.listdir(folder)]
-    for folder in folders:
-        collection_name = os.path.basename(folder)
-        if subset and collection_name not in subset:
-            continue
-        files = [os.path.join(folder, file) for file in os.listdir(folder)]
+    assert subset, f"Expected list of collections! got {subset}"
+
+    collections = [os.path.join(folder, collection) for collection in subset]
+
+    for collection in collections:
+        collection_name = collection.split("/")[-1]
+        files = file_list(collection)
+        files = [f for f in files if f.endswith(".json")]
         files = sorted(files)
         fs_data[collection_name] = {}
         for file in files:
@@ -68,7 +70,7 @@ def load_from_filesystem(folder, subset=[], history=False):
                 try:
                     filedata = json.load(f)
                 except json.decoder.JSONDecodeError:
-                    rich.print(f"[red]ERROR!! could not load fild {file}, JSON decode error")
+                    rich.print(f"[red]ERROR!! could not load file {file}, JSON decode error")
                     exit()
 
             file_id = filedata["#id"]
@@ -76,9 +78,26 @@ def load_from_filesystem(folder, subset=[], history=False):
                 rich.print(f"[red]ERROR!! File '{file}' has ID='{file_id}', but it does not match with filename!")
                 exit()
 
+            # If we have a subfolder, make it the document group
+            last_folder = file.split("/")[-2]
+            if last_folder != collection_name:
+                # Is the last folder a newly created group?
+                group = filedata.get("#group", "")
+                if last_folder != group:
+                    rich.print(f"assign document '{file_id}' to group '{last_folder}'")
+                    filedata["#group"] = last_folder
+
+            if not filedata.get("#group", ""):
+                filedata["#group"] = ""
+
             if history:  # in history we have multiple instances with the same id, so add version at the end
                 file_id += f"#v{filedata['#id']}"
+
+            if not history:  # avoid duplicates!
+                assert file_id not in fs_data[collection_name].keys(), f"Found duplicated id in '{collection}':'{file_id}'"
+
             fs_data[collection_name][file_id] = filedata
+
     return fs_data
 
 
@@ -94,16 +113,27 @@ def store_to_filesystem(data, folder, verbose=False, subset=[], history=False):
     for collection in data.keys():
         if subset and collection not in subset:
             continue
-        folder_path = os.path.join(folder, collection)
-        os.makedirs(folder_path, exist_ok=True)
+        base_path = os.path.join(folder, collection)
+        os.makedirs(base_path, exist_ok=True)
         for document_id, document in data[collection].items():
+
+            # If there is a group, process the folder
+            group = document["#group"]
+            if group:
+                folder_path = os.path.join(base_path, group)
+                os.makedirs(folder_path, exist_ok=True)
+            else:
+                folder_path = base_path
+
             if history:
                 version = document["#version"]
                 document_filename = os.path.join(folder_path, document_id) + f".v{version}.json"
             else:
                 document_filename = os.path.join(folder_path, document_id) + ".json"
+
             with open(document_filename, "w") as f:
                 f.write(json.dumps(document, indent=2, ensure_ascii=False))
+
             n += 1
 
     if verbose:
@@ -162,7 +192,7 @@ def compoare_fs_to_db(db_data, fs_data) -> list:
             if doc_id not in db_data[collection].keys():
                 rich.print(f"[cyan]{collection} {doc_id} new document!")
                 diff.append({"collection": collection, "doc_id": doc_id, "action": "create"})
-            elif not compare_dicts(db_data[collection][doc_id], fs_data[collection][doc_id]):
+            elif not compare_dicts(db_data[collection][doc_id], fs_data[collection][doc_id], metadata=True):
                 rich.print(f"[green]{collection} {doc_id} modified!")
                 diff.append({"collection": collection, "doc_id": doc_id, "action": "replace"})
 

@@ -100,14 +100,19 @@ def postgres_results_to_dict(results, time_format="%Y-%m-%dT%H:%M:%SZ"):
     :return: list of json docs
     """
     docs = []
-    for doc_id, author, version, creationDate, modificationDate, jsonb in results:
+    for doc_id, author, version, creationDate, modificationDate, group, jsonb in results:
         doc = {
             "#id": doc_id,
             "#author": author,
             "#version": version,
             "#creationDate": creationDate.strftime(time_format),
-            "#modificationDate": modificationDate.strftime(time_format)
+            "#modificationDate": modificationDate.strftime(time_format),
+            "#group": group
         }
+
+        if isinstance(group, type(None)):
+            doc["#group"] = ""  # make sure group is string
+
         doc.update(jsonb)
         docs.append(doc)
 
@@ -204,6 +209,7 @@ class MetadataCollector(LoggerSuperclass):
                     doc_version SMALLINT,
                     creationDate TIMESTAMPTZ,
                     modificationDate TIMESTAMPTZ,
+                    group VARCHAR(255),
                     doc JSONB
                 );
                 """
@@ -349,7 +355,7 @@ class MetadataCollector(LoggerSuperclass):
         if collection not in self.collection_names:
             raise LookupError(f"Collection {collection} not found!")
 
-        query = f"select doc_id, author, doc_version, creationdate, modificationdate, doc from {collection.lower()}"
+        query = f"select doc_id, author, doc_version, creationdate, modificationdate, doc_group, doc from {collection.lower()}"
 
         if filter:
             query += f" {filter}"
@@ -435,13 +441,14 @@ class MetadataCollector(LoggerSuperclass):
         author = document["#author"]
         creation_date = document["#creationDate"]
         modification_date = document["#modificationDate"]
+        group = document["#group"]
 
         contents = self.strip_metadata_fields(document)
         insert_query = sql.SQL(f"""
-            INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc, doc_group)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """)
-        values = (document_id, author, version, creation_date, modification_date, json.dumps(contents))
+        values = (document_id, author, version, creation_date, modification_date, json.dumps(contents), group)
         self.db_hist.exec_query((insert_query, values), fetch=False)
         return document
 
@@ -502,12 +509,17 @@ class MetadataCollector(LoggerSuperclass):
             author = self.default_author
 
         old_document = self.get_document(collection, document_id)  # getting old metadata
+
+        old_group = old_document["#group"]
+        new_group = document["#group"]
+
         metadata = {key: value for key, value in old_document.items() if key.startswith("#")}
         metadata["#version"] += 1
         metadata["#modificationDate"] = get_timestamp_string()
         metadata["#author"] = author  # update author
         metadata["#creationDate"] = old_document["#creationDate"]
         self.debug(f"Replace {document_id} to {collection}, new version={metadata['#version']}")
+
         old_contents = {key: value for key, value in old_document.items() if not key.startswith("#")}
 
         # keep only elements that are not metadata
@@ -515,7 +527,10 @@ class MetadataCollector(LoggerSuperclass):
         new_document = metadata  # start new document with metadata
         new_document.update(contents)  # add contents after metadata
 
-        if contents == old_contents:
+        if old_group != new_group:
+            new_document["#group"] = new_group
+
+        if contents == old_contents and old_group == new_group:
             if force:
                 self.warning(f"document {document['#id']} is identical to previous one")
             else:
@@ -530,6 +545,7 @@ class MetadataCollector(LoggerSuperclass):
             SET author = %s,
                 doc_version = %s,                
                 modificationdate = %s,
+                doc_group = %s,
                 doc = %s
             WHERE doc_id = '{document_id}';
         """)
@@ -539,6 +555,7 @@ class MetadataCollector(LoggerSuperclass):
             author,
             metadata["#version"],
             metadata["#modificationDate"],
+            metadata["#group"],
             json.dumps(contents),
         )
         self.db.exec_query((query, new_data), fetch=False)
