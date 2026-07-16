@@ -12,7 +12,7 @@ created: 21/09/2023
 from argparse import ArgumentParser, ArgumentError
 
 from mmm import setup_log
-from mmm.common import ask_user_input, dir_list, file_list
+from mmm.common import ask_user_input, dir_list, file_list, assert_type
 from mmm.metadata_collector import MetadataCollector, init_metadata_collector
 import yaml
 import rich
@@ -48,6 +48,55 @@ def load_from_database(mc, subset=[], history=False, verbose=False):
     return db_data
 
 
+def process_markdown_to_json(doc: dict, filename: str, collection: str):
+    """
+    Some documents may have links to Markdown documents to facilitate edits. This process expands the md files into
+    strings in the JSON doc.
+
+    { "readme": "&folder/file.md"} <<- this will be expanded
+
+    :param doc:
+    :return:
+    """
+    for key, value in doc.items():
+        if isinstance(value, str):
+            if key.startswith("&") and value.split(".")[-1] == "md":
+                directory = os.path.dirname(filename)
+                md_file = os.path.join(directory, value)
+
+                if not os.path.isfile(md_file):
+                    raise ValueError(f"Cannot find referenced file {md_file}")
+
+                with open(md_file) as f:
+                    md_contents = f.read()
+                    doc[key] = md_contents
+
+        elif isinstance(value, dict):
+            doc[key] = process_markdown_to_json(value, filename, collection)
+
+    return doc
+
+
+
+def load_doc(filename: str, collection: str):
+    """
+    Loads a JSON doc. Additionally, loads referenced markdown files
+    :param filname:
+    :return:
+    """
+    assert_type(filename, str)
+    assert os.path.exists(filename)
+    with open(filename) as f:
+        try:
+            filedata = json.load(f)
+        except json.decoder.JSONDecodeError as e:
+            rich.print(f"[red]ERROR!! could not load file {filename}, JSON decode error")
+            raise e
+
+    return process_markdown_to_json(filedata, filename, collection)
+
+
+
 def load_from_filesystem(folder, subset=[], history=False):
     """
     Loads ALL data from database into dict
@@ -66,13 +115,8 @@ def load_from_filesystem(folder, subset=[], history=False):
         files = sorted(files)
         fs_data[collection_name] = {}
         for file in files:
-            with open(file) as f:
-                try:
-                    filedata = json.load(f)
-                except json.decoder.JSONDecodeError:
-                    rich.print(f"[red]ERROR!! could not load file {file}, JSON decode error")
-                    exit()
-
+            filedata = load_doc(file, collection)
+            assert_type(filedata, dict)
             file_id = filedata["#id"]
             if file_id != os.path.basename(file).split(".")[0]:
                 rich.print(f"[red]ERROR!! File '{file}' has ID='{file_id}', but it does not match with filename!")
@@ -99,6 +143,35 @@ def load_from_filesystem(folder, subset=[], history=False):
             fs_data[collection_name][file_id] = filedata
 
     return fs_data
+
+
+def process_markdown_refs(doc, filename, collection,  doc_id=""):
+    if not doc_id:
+        doc_id = doc["#id"]
+
+    for key, value in doc.items():
+        if isinstance(value, str):
+            if key.startswith("&"):  # found a markdown reference
+                folder = os.path.join(os.path.dirname(filename), "readme")
+                os.makedirs(folder, exist_ok=True)
+                md_file = os.path.join(folder, f"{doc_id}.md")
+                contents = value
+
+                with open(md_file, "w") as f:
+                    f.write(contents)
+
+                doc[key] = md_file.split(collection+"/")[-1]
+
+        elif isinstance(value, dict):
+            doc[key] = process_markdown_refs(value, filename, collection, doc_id=doc_id)
+
+    return doc
+
+
+def store_doc_to_filesystem(doc: dict, filename: str, collection: str):
+    doc = process_markdown_refs(doc, filename, collection)
+    with open(filename, "w") as f:
+        f.write(json.dumps(doc, indent=2, ensure_ascii=False))
 
 
 def store_to_filesystem(data, folder, verbose=False, subset=[], history=False):
@@ -131,8 +204,7 @@ def store_to_filesystem(data, folder, verbose=False, subset=[], history=False):
             else:
                 document_filename = os.path.join(folder_path, document_id) + ".json"
 
-            with open(document_filename, "w") as f:
-                f.write(json.dumps(document, indent=2, ensure_ascii=False))
+            store_doc_to_filesystem(document, document_filename, collection)
 
             n += 1
 

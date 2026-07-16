@@ -881,7 +881,7 @@ class ZenodoClient(LoggerSuperclass):
         assert_type(files, list)
         [assert_type(x, Path) for x in files]
 
-        md_text = dataset_conf["export"]["zenodo"]["readme"]
+        md_text = dataset_conf["export"]["zenodo"]["&readme"]
 
         metadata = []
 

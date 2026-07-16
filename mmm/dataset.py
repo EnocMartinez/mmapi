@@ -18,7 +18,8 @@ from .schemas import mmm_schemas
 from .fileserver import FileServer, send_file
 from emso_metadata_harmonizer import erddap_config
 import time
-from mmm.common import validate_schema, LoggerSuperclass, CYN, GRN, assert_type, run_over_ssh, run_subprocess
+from mmm.common import validate_schema, LoggerSuperclass, CYN, GRN, assert_type, run_over_ssh, run_subprocess, \
+    human_readable_bytes
 import logging
 
 
@@ -82,7 +83,10 @@ class DatasetObject(LoggerSuperclass):
             date, time_t, tz = output.split(" ")[5:8]
             time_str = f"{date}T{time_t}{tz}"
             self.ctime = pd.Timestamp(time_str)
-            self.size = output.split(" ")[4]
+            self.size = int(output.split(" ")[4])
+            self.filename = filename
+
+
         else:
             # File should be local
             assert os.path.isfile(filename), f"file '{filename}' does not exist!"
@@ -90,6 +94,9 @@ class DatasetObject(LoggerSuperclass):
             self.size = os.path.getsize(filename)
 
         self.exporter = DataExporter(resource, self.dataset_id, self.fileserver, self.log)
+
+        if self.delivered:
+            self.exporter.remote_file = self.filename
 
     def tstart_str(self, fmt="%Y-%m-%dT%H:%M:%SZ"):
         return self.tstart.strftime(fmt)
@@ -240,8 +247,9 @@ class DatasetObject(LoggerSuperclass):
         string += f"     time end: {self.tend_str()}\n\n"
         string += f"-------- file --------\n"
         string += f"     filename: {self.filename}\n"
-        string += f"         size: {self.size / (1024 * 1024):.02f} MB\n"
+        string += f"         size: {human_readable_bytes(self.size)}\n"
         string += f"          url: {self.url}\n"
+        string += f"         host: {self.fileserver.host}\n"
         string += f"    delivered: {self.delivered}\n"
         string += f"-----------------------------------------"
         return string

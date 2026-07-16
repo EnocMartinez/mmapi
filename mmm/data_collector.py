@@ -276,20 +276,26 @@ class DataCollector(LoggerSuperclass):
         else:
             assert service_name in conf["export"].keys(), f"Dataset {dataset_id} doesn't have export service '{service_name}'"
 
+
+        # Process special services that do not generate data, but simply link them like Zenodo or CKAN
         if service_name == "ckan":
-            # CKAN only points to the FileServer, no need to create a dataset here
             if not self.ckan:
                 self.error("CKAN not initialized!", exception=ValueError)
             return self.ckan.process_mmapi_dataset(conf, resources=resources)
-
         elif service_name == "zenodo":
             if not self.zenodo:
                 self.error("Zenodo not initialized!", exception=ValueError)
-
             return self.zenodo.process_mmapi_dataset(conf, resources=resources, publish=publish)
 
         datasets = []
-        for resource in conf["export"][service_name]["resources"]:
+
+
+        if not resources:  # By default keep all resources
+            resources_obj = conf["export"][service_name]["resources"]
+        else: # Keep just the selected resources
+            resources_obj =  [r for r in conf["export"][service_name]["resources"] if r["id"] in resources]
+
+        for resource in resources_obj:
             time_start, time_end = self.resolve_time_coverage(conf, resource, time_start, time_end)
             datasets += self.generate_dataset_tree(conf, service_name, resource, time_start, time_end, fmt=fmt,overwrite=overwrite)
 
@@ -409,6 +415,7 @@ class DataCollector(LoggerSuperclass):
             return None
 
         obj = DatasetObject(self.mc, self.fileserver, conf, filename, service_name, resource, time_start, time_end, fmt, self.log, delivered=delivered)
+        self.debug(obj)
         return obj
 
     def dataframe_from_sta(self, conf: dict, station_ids: list, sensor_ids: list, resource: dict, time_start: pd.Timestamp,
@@ -641,6 +648,7 @@ class DataCollector(LoggerSuperclass):
                 query += query.replace(";", f""" order by {table_name}.timestamp limit 1;""")
             elif last:
                 query += query.replace(";", f""" order by {table_name}.timestamp desc limit 1;""")
+
         df = self.sta.dataframe_from_query(query)
 
         # sort by timestamp
@@ -923,9 +931,10 @@ class DataCollector(LoggerSuperclass):
                 cmd += f"convert -quality 95 {source} {dest.replace('.png', '.jpg')}\n"
             else:
                 # directly copy
-                cmd += f"cp {source} {dest}\n"
+                cmd += f"ln -s {source} {dest}\n"
 
-        cmd += f"zip -9 -r {remote_filename} index.csv {' '.join(sensors)}\n"
+        cmd += f"zip -6 -rn .jpg:.jpeg:.mp4:.png:.nc -r {remote_filename} index.csv {' '.join(sensors)}\n"
+
         for sensor in sensors:
             cmd += f"rm -rf {sensor} \n"
         cmd += f"rm {tmp_folder}/index.csv\n"
@@ -943,7 +952,9 @@ class DataCollector(LoggerSuperclass):
             self.info(f"JPEG compression enabled, this will take even longer than usual!")
         self.info(f"Running script to create zip file with {len(files)} files, this may take a while...")
         # Run the script!
+        t = time.time()
         run_over_ssh(self.fileserver.host, script_dest + "/" + script_name, fail_exit=True)
+        self.info(f"Script executed, it took {time.time() -t :.02f} seconds")
 
         # Check if the size is coherent
         a = run_over_ssh(self.fileserver.host, f"ls -l {remote_filename}")

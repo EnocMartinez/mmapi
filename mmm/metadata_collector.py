@@ -1270,6 +1270,8 @@ class MetadataCollector(LoggerSuperclass):
         assert_type(doi, str)
         assert_type(zenodo_record, str)
 
+        assert path, f"Empty path not valid!"
+
         # Helper: convert empty string to None (which becomes NULL in SQL)
         def empty_to_none(value):
             return None if value == "" else value

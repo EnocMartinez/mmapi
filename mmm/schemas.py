@@ -529,9 +529,9 @@ zenodo_exporter_conf = {
             "minItems": 1,
             "items": zenodo_resource
         },
-        "readme": {"type": "string"},
+        "&readme": {"type": "string", "description": "The README data in markdown. It will be stored as plain txt in the database, but it will be exported as a separate markdown file in the filesystem"},
     },
-    "required": ["resources", "readme"]
+    "required": ["resources", "&readme"]
 }
 
 
