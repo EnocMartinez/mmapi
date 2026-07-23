@@ -19,13 +19,36 @@ from .fileserver import FileServer, send_file
 from emso_metadata_harmonizer import erddap_config
 import time
 from mmm.common import validate_schema, LoggerSuperclass, CYN, GRN, assert_type, run_over_ssh, run_subprocess, \
-    human_readable_bytes
+    human_readable_bytes, get_file_md5
 import logging
+
+
+class DatasetBoundaries:
+    def __init__(self, df: pd.DataFrame):
+        """
+        Detects the boundaries of a dataframe, including min max time, lat, lon and depth
+        :param df:
+        """
+        coords = ["timestamp", "depth", "latitude", "longitude"]
+        for c in coords:
+            assert c in df.columns, f"Expected coordinate '{c}'"
+
+        self.time_min = pd.Timestamp(df["timestamp"].min())
+        self.time_max = pd.Timestamp(df["timestamp"].max())
+        self.depth_min = float(df["depth"].min())
+        self.depth_max = float(df["depth"].max())
+        self.latitude_min = float(df["latitude"].min())
+        self.latitude_max = float(df["latitude"].max())
+        self.longitude_min = float(df["longitude"].min())
+        self.longitude_max = float(df["longitude"].max())
+
+        assert_type(self.time_max, pd.Timestamp)
+        assert_type(self.time_min, pd.Timestamp)
 
 
 class DatasetObject(LoggerSuperclass):
     def __init__(self, mc: MetadataCollector, fileserver: FileServer, conf: dict, filename: str, service_name: str, resource: dict,
-                 tstart: pd.Timestamp, tend: pd.Timestamp, fmt: str, log: logging.Logger, delivered=False):
+                 tstart: pd.Timestamp, tend: pd.Timestamp, fmt: str, boundaries: DatasetBoundaries, delivered=False):
         """
         This object contains all the metadata related to a dataset (or data file) and provides methods to deliver,
         update it.
@@ -37,8 +60,8 @@ class DatasetObject(LoggerSuperclass):
         :param tend: time end
         :param fmt: export format (by default format in conf)
         """
-        self.log = log
-        LoggerSuperclass.__init__(self, log, "Dataset", colour=CYN)
+        self.log = logging.getLogger()
+        LoggerSuperclass.__init__(self, self.log, "Dataset", colour=CYN)
 
         assert_type(mc, MetadataCollector)
         assert_type(fileserver, FileServer)
@@ -49,6 +72,8 @@ class DatasetObject(LoggerSuperclass):
         assert_type(tstart, pd.Timestamp)
         assert_type(tend, pd.Timestamp)
         assert_type(fmt, str)
+        assert_type(fmt, str)
+        assert_type(boundaries, DatasetBoundaries)
         assert(delivered, bool)
 
         init = time.time()
@@ -65,6 +90,7 @@ class DatasetObject(LoggerSuperclass):
         self.tend = tend
         self.fmt = fmt
         self.delivered = delivered  # will be set to True once the data object has been sent
+        self.boundaries = boundaries
 
         self.dataset_id = conf["#id"]
         self.resource_id = resource["id"]
@@ -86,12 +112,14 @@ class DatasetObject(LoggerSuperclass):
             self.size = int(output.split(" ")[4])
             self.filename = filename
 
+            self.md5 =  run_over_ssh(self.fileserver.host, f"cat {filename} | md5sum").split(" ")[0]
 
         else:
             # File should be local
             assert os.path.isfile(filename), f"file '{filename}' does not exist!"
             self.ctime = pd.Timestamp(os.path.getctime(filename))
             self.size = os.path.getsize(filename)
+            self.md5 = get_file_md5(filename)
 
         self.exporter = DataExporter(resource, self.dataset_id, self.fileserver, self.log)
 
@@ -143,8 +171,27 @@ class DatasetObject(LoggerSuperclass):
         #     path = ""  # for other services datasets are not reachable directly via URL
 
         host = self.resource["host"]
-        self.mc.dataset_register(self.dataset_id, self.resource_id, self.service_name, self.fmt, self.tstart,
-                                 self.tend, self.url, self.exporter.remote_file, host)
+        self.mc.dataset_register(
+            self.dataset_id,
+            self.resource_id,
+            self.service_name,
+            self.fmt,
+            self.tstart,  # Time start of the period, not the actual data
+            self.tend,    # Time end of the period, not the actual data
+            self.exporter.remote_file,  # path to the file in the server
+            host,  # host of the server
+            self.url,  # public URL, if exists
+            self.boundaries.time_min, # first timestamp in the data
+            self.boundaries.time_max,
+            self.boundaries.latitude_min,
+            self.boundaries.latitude_max,
+            self.boundaries.longitude_min,
+            self.boundaries.longitude_max,
+            self.boundaries.depth_min,
+            self.boundaries.depth_max,
+            self.md5
+
+        )
         return path_or_url
 
     def configure_erddap(self, datasets_xml, dataset_path):

@@ -25,13 +25,14 @@ import rich
 from .darwin_core import DarwinCoreArchive
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
-from .common import check_url, run_over_ssh, LoggerSuperclass, assert_types, GRN, RST, assert_type, populate_dict
+from .common import check_url, run_over_ssh, LoggerSuperclass, assert_types, GRN, RST, assert_type, populate_dict, \
+    human_readable_bytes
 from .data_sources.postgresql import sql_list
 from .data_manipulation import merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals, pivot_dataframe, \
     df_netcdf_normalization, floor_timestamp, ceil_timestamp, ensure_timestamp, find_first
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
-from mmm.dataset import DatasetObject
+from mmm.dataset import DatasetObject, DatasetBoundaries
 from mmm.schemas import dataset_exporter_formats, valid_dataset_services, mmapi_data_types
 from .zenodo import ZenodoClient
 
@@ -72,10 +73,12 @@ class DataCollector(LoggerSuperclass):
         self.emso = None  # by default, do not initialize emso metadata
 
         try:
-            self.zenodo = ZenodoClient(self.mc, secrets, self.fileserver, log)
+            self.zenodo = ZenodoClient(self, secrets, self.fileserver, log)
         except KeyError as e:
             self.warning(f"Could not initialize Zenodo: {e.__repr__()}")
             self.zenodo = None
+
+        self.boundaries = None
 
     def dataset_filename(self, dataset: dict, fmt: str, tstart: pd.Timestamp, tend: pd.Timestamp,
                          tmp_folder="temp") -> str:
@@ -241,7 +244,8 @@ class DataCollector(LoggerSuperclass):
 
     def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str = "",
                          time_end: pd.Timestamp|str = "", fmt: str = "", overwrite=False, erddap_config=False,
-                         secrets: dict=None, resources: dict = None, local=False, publish=False) -> List[DatasetObject,]:
+                         secrets: dict=None, resources: dict = None, local=False, publish=False,
+                         limit:int = 0) -> List[DatasetObject,]:
         """
 
         :param dataset: dataset_id or dataset configuration dict
@@ -285,7 +289,7 @@ class DataCollector(LoggerSuperclass):
         elif service_name == "zenodo":
             if not self.zenodo:
                 self.error("Zenodo not initialized!", exception=ValueError)
-            return self.zenodo.process_mmapi_dataset(conf, resources=resources, publish=publish)
+            return self.zenodo.process_mmapi_dataset(conf, resources=resources, publish=publish, tstart=time_start, tend=time_end)
 
         datasets = []
 
@@ -297,7 +301,7 @@ class DataCollector(LoggerSuperclass):
 
         for resource in resources_obj:
             time_start, time_end = self.resolve_time_coverage(conf, resource, time_start, time_end)
-            datasets += self.generate_dataset_tree(conf, service_name, resource, time_start, time_end, fmt=fmt,overwrite=overwrite)
+            datasets += self.generate_dataset_tree(conf, service_name, resource, time_start, time_end, limit=limit, fmt=fmt,overwrite=overwrite)
 
         # Avoid None datasets
         datasets = [d for d in datasets if d]
@@ -338,7 +342,7 @@ class DataCollector(LoggerSuperclass):
         return datasets
 
     def generate_dataset_tree(self,  dataset: dict, service_name: str, resource: dict, time_start: pd.Timestamp,
-                              time_end: pd.Timestamp, fmt: str="", overwrite=False):
+                              time_end: pd.Timestamp, fmt: str="", overwrite=False, limit:int=0):
         assert_type(service_name, str)
         assert_types(dataset, [dict, str])
         assert_types(time_start, [pd.Timestamp, type(None)])
@@ -355,13 +359,13 @@ class DataCollector(LoggerSuperclass):
 
         datasets = []
         for tstart, tend in intervals:
-            d = self.generate_dataset_file(conf, service_name, resource, tstart, tend, fmt=fmt, overwrite=overwrite)
+            d = self.generate_dataset_file(conf, service_name, resource, tstart, tend, fmt=fmt, overwrite=overwrite, limit=limit)
             datasets.append(d)
 
         return datasets
 
     def generate_dataset_file(self, conf: dict, service_name: str, resource: dict, time_start: pd.Timestamp,
-                              time_end: pd.Timestamp, fmt: str = "", overwrite=False) -> DatasetObject|None:
+                              time_end: pd.Timestamp, fmt: str = "", overwrite=False, limit: int=0) -> DatasetObject|None:
         """
         Generates a dataset based on its configuration stored in Metadata DB
         :param conf: #id of the dataset
@@ -398,13 +402,12 @@ class DataCollector(LoggerSuperclass):
             else:
                 self.error(f"Data resource already exists '{dataset_label}', use the --overwrite flag to overwrite it")
                 return None
-
         if fmt == "csv":
             filename, delivered = self.csv_from_sta(conf, resource, time_start, time_end)
         elif fmt == "netcdf":
             filename, delivered = self.netcdf_from_sta(conf, resource, time_start, time_end)
         elif fmt == "zip":
-            filename, delivered = self.zip_from_filesystem(conf, resource, time_start, time_end, overwrite=overwrite)
+            filename, delivered = self.zip_from_filesystem(conf, resource, time_start, time_end, limit=limit, overwrite=overwrite)
         elif fmt == "dwca":
             filename, delivered = self.darwin_core_from_sta(conf, resource, time_start, time_end, overwrite=overwrite)
         else:
@@ -413,8 +416,8 @@ class DataCollector(LoggerSuperclass):
         if not filename:
             self.warning("No dataset created!")
             return None
-
-        obj = DatasetObject(self.mc, self.fileserver, conf, filename, service_name, resource, time_start, time_end, fmt, self.log, delivered=delivered)
+        obj = DatasetObject(self.mc, self.fileserver, conf, filename, service_name, resource, time_start, time_end, fmt,
+                            self.boundaries, delivered=delivered)
         self.debug(obj)
         return obj
 
@@ -479,7 +482,9 @@ class DataCollector(LoggerSuperclass):
 
         return df
 
-    def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=None, tstart=None, tend=None, first=False, last=False, model_name=None,):
+    def dataframe_from_sta_generic(self, station_ids: list, sensor_ids, data_type: str, average="", fois=None,
+                                   tstart=None, tend=None, first=False, last=False, model_name=None,
+                                   limit:int=0):
         """
         This function returns generic DataFrame with the same columns for all data types. The generic dataframe has the
         following columns:
@@ -594,6 +599,7 @@ class DataCollector(LoggerSuperclass):
                     and "DATASTREAMS"."THING_ID" = "THINGS"."ID"
                     and "OBS_PROPERTIES"."ID" = "DATASTREAMS"."OBS_PROPERTY_ID"
                     and "FEATURES"."ID" = "OBSERVATIONS"."FEATURE_ID"
+                order by timestamp
                 ;"""
 
             if tstart:
@@ -637,6 +643,7 @@ class DataCollector(LoggerSuperclass):
                     and "DATASTREAMS"."SENSOR_ID"  =  "SENSORS"."ID"
                     and "DATASTREAMS"."THING_ID" = "THINGS"."ID"
                     and "OBS_PROPERTIES"."ID" = "DATASTREAMS"."OBS_PROPERTY_ID"
+                order by timestamp
                 ;"""
 
             if tstart:
@@ -649,11 +656,20 @@ class DataCollector(LoggerSuperclass):
             elif last:
                 query += query.replace(";", f""" order by {table_name}.timestamp desc limit 1;""")
 
+        if limit:
+            self.warning(f"Limiting the query to {limit} rows!")
+            query = query.replace(";", f"limit {limit};")
+
         df = self.sta.dataframe_from_query(query)
 
         # sort by timestamp
         df = df.sort_values('timestamp').reset_index(drop=True)
         self.add_station_coordinates(df)
+        self.debug(df)
+        if not df.empty:
+            self.boundaries = DatasetBoundaries(df)
+        else:
+            self.boundaries = None
         return df
 
     def dataframe_from_sta_timeseries(self, conf: dict, resource: dict, station_ids: list, sensor_ids: list, time_start: pd.Timestamp = None,
@@ -824,7 +840,7 @@ class DataCollector(LoggerSuperclass):
         self.info(f"Writing CSV file '{filename}'")
         return filename, False
 
-    def zip_from_filesystem(self, conf, resource, time_start, time_end, overwrite=False) -> (str, bool):
+    def zip_from_filesystem(self, conf, resource, time_start, time_end, overwrite=False, limit: int = 0) -> (str, bool):
         """
         Compresses all files in the fileserver into a zip file. Since millions of files can be compressed, a small
         bash script will be generated and transferred to the fileserver and executed there. Then the file will be
@@ -851,7 +867,7 @@ class DataCollector(LoggerSuperclass):
 
         # Getting dataframe
         df = self.dataframe_from_sta_generic(conf["@stations"], conf["@sensors"], "files", tstart=time_start,
-                                             tend=time_end, fois=fois)
+                                             tend=time_end, fois=fois, limit=limit)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
         df = df[["timestamp", "value", "sensor_id", "platform_id", "foi"]]
         df = df.rename(columns={"value": "urls"})
@@ -962,7 +978,8 @@ class DataCollector(LoggerSuperclass):
         if size < 3000:
             self.warning(f"first url: {df['urls'].values[0]}")
             self.warning(f"last  url: {df['urls'].values[-1]}")
-            self.error("ZIP file looks empty! less than 3k means there's nothing inside", exception=ValueError)
+            self.warning(f"Remote filename: {remote_filename}")
+            self.error(f"ZIP file looks empty (file size {human_readable_bytes(size)})! less than 3k means there's nothing inside", exception=ValueError)
 
         # At this point the file should be created
         # if the destination and the fileserver are the same (very likely), just copy from temp folder to the definitive

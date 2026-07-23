@@ -3,46 +3,209 @@ from datetime import datetime, date, timezone
 from pathlib import Path
 import time
 from threading import Thread
-from typing import Tuple
+from typing import Tuple, List, Optional
 import markdown
 import requests
 import pandas as pd
 import os
+import json
+import numpy as np
 
 from emso_metadata_harmonizer.metadata.emso import init_emso_metadata
 from mmm.common import LoggerSuperclass, assert_type, assert_types, get_linked_resource_conf, download_file, CYN, \
     human_readable_bytes, get_file_md5, extract_netcdf_metadata
-from mmm import MetadataCollector
+
 from mmm.fileserver import FileServer, get_file
+import rich
 
 
-class RemoteDataset:
-    def __init__(self, url, path, host, temp_folder="temp"):
-        self.host = host
-        self.url = url
-        self.path = path
-        self.temp_folder = temp_folder
+def is_exactly_one_year_interval(df: pd.DataFrame) -> bool:
+    # 1. Convert columns to datetime (ensuring UTC/timezone alignment)
+    from_dates = pd.to_datetime(df['data_from'], utc=True)
+    to_dates = pd.to_datetime(df['data_to'], utc=True)
 
+    # 2. Check if adding exactly 1 calendar year to 'data_from' equals 'data_to'
+    # pd.DateOffset(years=1) perfectly handles varying days in leap years (e.g., Feb 29)
+    return all(f + pd.DateOffset(years=1) == t for f, t in zip(from_dates, to_dates))
+
+
+class EuroSciVocResolver:
+    """
+    Resolves plain-text keywords to their EuroSciVoc term id in Zenodo's
+    subjects vocabulary, using an exact (case-insensitive) prefLabel match.
+
+    Results are cached to disk (default: .temp/dicts.json) to avoid
+    re-querying Zenodo for the same keyword on every run. Cache entries
+    expire after `ttl_days` days and are re-fetched afterwards.
+    """
+
+    SCHEME = "EuroSciVoc"
+
+    def __init__(self, api_base: str,
+                 cache_path: str = ".temp/euroscivoc.json",
+                 ttl_days: float = 30,
+                 timeout: int = 30):
+        self.cache_path = Path(cache_path)
+        self.ttl_seconds = ttl_days * 86400
+        self.api_base = api_base.rstrip("/")
+        self.timeout = timeout
+        self.cache = self._load_cache()
         self.log = logging.getLogger()
 
+    # ------------------------------------------------------------------ #
+    # Cache handling
+    # ------------------------------------------------------------------ #
+    def _load_cache(self) -> dict:
+        if not self.cache_path.exists():
+            return {}
+        try:
+            with open(self.cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("Cache root is not a dict")
+            return data
+        except (json.JSONDecodeError, ValueError, OSError) as e:
+            self.log.warning(f"Cache at {self.cache_path} is missing/corrupted ({e}); starting fresh.")
+            return {}
+
+    def _save_cache(self) -> None:
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.cache_path.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(self.cache, f, indent=2, ensure_ascii=False)
+        tmp_path.replace(self.cache_path)  # atomic write, avoids corrupting cache on crash mid-write
+
+    def _cache_get(self, keyword_key: str) -> Optional[dict]:
+        entry = self.cache.get(keyword_key)
+        if entry is None:
+            return None
+        if time.time() - entry.get("cached_at", 0) > self.ttl_seconds:
+            return None  # expired, treat as a miss
+        return entry
+
+    def _cache_set(self, keyword_key: str, subject_id: Optional[str], label: Optional[str]) -> None:
+        self.cache[keyword_key] = {
+            "id": subject_id,       # None if no match was found (negative caching, still expires via ttl)
+            "label": label,
+            "cached_at": time.time(),
+        }
+        self._save_cache()
+
+    # ------------------------------------------------------------------ #
+    # Resolution
+    # ------------------------------------------------------------------ #
+    def resolve(self, keyword: str) -> Optional[dict]:
+        """
+        Resolve a single plain-text keyword to a EuroSciVoc subject entry.
+
+        Returns:
+            {"id": "<term id>", "label": "<prefLabel>"} on an exact match,
+            or None if no exact EuroSciVoc prefLabel match was found
+            (a warning is logged in that case).
+        """
+        key = keyword.strip().lower()
+
+        cached = self._cache_get(key)
+        if cached is not None:
+            return {"id": cached["id"], "label": cached["label"]} if cached["id"] else None
+
+        subject_id, label = self._query_zenodo(keyword)
+        self._cache_set(key, subject_id, label)
+
+        if subject_id is None:
+            self.log.warning(f"No exact EuroSciVoc match for keyword '{keyword}'; skipping.")
+            return None
+        return {"id": subject_id, "label": label}
+
+    def _query_zenodo(self, keyword: str):
+        resp = requests.get(
+            f"{self.api_base}/subjects",
+            params={"suggest": keyword},
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        hits = resp.json().get("hits", {}).get("hits", [])
+
+        for hit in hits:
+            if hit.get("scheme") != self.SCHEME:
+                continue
+            label = hit.get("subject", "")
+            if label.strip().lower() == keyword.strip().lower():
+                return hit["id"], label
+
+        return None, None
+
+
+class ZenodoResource:
+    def __init__(self, row: pd.Series, temp_folder="temp"):
+        """
+        Input dataframe should have the same columns
+        :param row:
+        """
+        self.log = logging.getLogger()
+        assert_type(row, pd.Series)
+
+        self.dataset_id = row["dataset_id"]
+        self.resource_id = row["resource_id"]
+        self.service = row["service"]
+        self.format = row["format"]
+        self.data_from = row["data_from"]
+        self.data_to = row["data_to"]
+        self.path = row["path"]
+        self.host = row["host"]
+        self.url = row["url"]
+        self.creation_date = row["creation_date"]
+        self.modification_date = row["modification_date"]
+        self.time_min = row["time_min"]
+        self.time_max = row["time_max"]
+        self.lat_min = row["lat_min"]
+        self.lat_max = row["lat_max"]
+        self.lon_min = row["lon_min"]
+        self.lon_max = row["lon_max"]
+        self.depth_min = row["depth_min"]
+        self.depth_max = row["depth_max"]
+        self.time_min = row["time_min"]
+        self.md5 = row["md5"]
+
+        self.doi = ""
+        self.zenodo_record = ""
+        if row["doi"]:
+            self.doi = row["doi"]
+        if row["zenodo_record"]:
+            self.zenodo_record = row["zenodo_record"]
+
         self.local_file = ""
+        self.temp_folder = temp_folder
+
+        self.basename = os.path.basename(self.path)
+        self.year = int(self.data_from.strftime("%Y")) # Year covering the dataset
+
 
     def download(self):
-        basename = os.path.basename(self.path)
-        self.file = os.path.join(self.temp_folder, basename)
+        self.local_file = os.path.join(self.temp_folder, self.basename)
 
-        if os.path.exists(self.file):
-            self.log.info(f"Using cached file {self.file}")
+        if os.path.exists(self.local_file) and self.md5 == get_file_md5(self.local_file):
+            self.log.info(f"Using cached file {self.local_file} (md5 match)")
 
         elif self.url:
-            download_file(self.url, self.file)
+            download_file(self.url, self.local_file)
 
         else:
-            get_file(self.host, self.path, self.file)
+            get_file(self.host, self.path, self.local_file)
+
+    def get_file_size(self):
+        if not self.local_file or not os.path.exists(self.local_file):
+            raise LookupError("Local file does not exist")
+        return os.stat(self.local_file).st_size
+
+    def __repr__(self):
+        return f"ZenodoResource -> {self.dataset_id}:{self.resource_id}:{self.service}:{self.format}:{self.year}"
+
+
 
 
 class ZenodoClient(LoggerSuperclass):
-    def __init__(self, mc: MetadataCollector, secrets: dict, fileserver: FileServer, log):
+    def __init__(self, dc: "DataCollector", secrets: dict, fileserver: FileServer, log):
         """
         Zenodo client
 
@@ -54,19 +217,24 @@ class ZenodoClient(LoggerSuperclass):
         LoggerSuperclass.__init__(self, log, "ZENODO", colour=CYN)
         assert_type(fileserver, FileServer)
 
-        self.mc = mc
+        self.dc = dc
+        self.mc = dc.mc
         self.secrets = secrets
         self.fileserver = fileserver
         self.token = secrets["zenodo"]["token"]
         self.url = secrets["zenodo"]["url"]
 
         self.production = True  # by default we use produciont env!
-        if "sandbox" in self.url:
-            self.production = False
 
         self.entries = None  # Here we will store the dataframe from the dataset_registry with all files to be sent
+        self.euroscivoc = EuroSciVocResolver(self.url)
 
-    def process_mmapi_dataset(self, dataset_conf: dict, resources: list = None,  publish=False) -> list:
+    def process_mmapi_dataset(self,
+                              dataset_conf: dict,
+                              resources: list = None,
+                              publish=False,
+                              tstart: pd.Timestamp|str="",
+                              tend: pd.Timestamp|str="") -> list:
         """
         Entry point called from DataCollector.generate_dataset().
 
@@ -76,21 +244,30 @@ class ZenodoClient(LoggerSuperclass):
         """
         assert_type(dataset_conf, dict)
         assert_types(resources, [list, type(None)])
+        assert_types(tstart, [pd.Timestamp, str])
+        assert_types(tend, [pd.Timestamp, str])
+        if tstart: tstart = pd.Timestamp(tstart)
+        if tend: tend = pd.Timestamp(tend)
 
         try:
             zenodo_resources = dataset_conf["export"]["zenodo"]["resources"]
         except KeyError:
             self.error("export/zenodo/resources not found in dataset config!", exception=KeyError)
 
+
+        if dataset_conf["export"]["zenodo"].get("yearlyRecord", False):
+            self.info("Creating one record for every year!")
+
         results = []
         for resource in zenodo_resources:
-            self.info(f"Processing Zenodo resource {dataset_conf['#id']}:{resource['id']}")
-            result = self.process_zenodo_resource(dataset_conf, resource, publish=publish)
+            self.info(f"Processing Zenodo resource {dataset_conf['#id']}")
+            result = self.process_zenodo_resource(dataset_conf, resource, publish=publish, tstart=tstart, tend=tend)
             results.append(result)
 
         return results
 
-    def resolve_zenodo_resource(self, dataset_conf: dict, resource: dict) -> Tuple[list[Path], str, str, str, str]:
+    def resolve_zenodo_resource(self, dataset_conf: dict, resource: dict,  tstart: pd.Timestamp | None = None,
+                                tend: pd.Timestamp | None = None, yearly=False) -> list:
         """
         Resolve the files that belong to one Zenodo resource.
 
@@ -103,9 +280,12 @@ class ZenodoClient(LoggerSuperclass):
         """
         assert_type(dataset_conf, dict)
         assert_type(resource, dict)
+        assert bool(tstart) == bool(tend), f"start and end time must be both set!"
+
         dataset_id = dataset_conf["#id"]
-        resource_id = resource["id"]
         linked_resource, source_service = get_linked_resource_conf(dataset_conf, resource["link"])
+        resource_id = linked_resource["id"]
+        fmt = linked_resource["format"]
 
         fs_resources = dataset_conf.get("export", {}).get("fileserver", {}).get("resources", [])
         if not fs_resources:
@@ -118,44 +298,51 @@ class ZenodoClient(LoggerSuperclass):
             )
 
         query = f"""
-            select dataset_id, resource_id, data_from, data_to, url, path, host, doi, zenodo_record
+            select *
             from {self.mc.dataset_registry_table}
             where
                 LOWER(dataset_id) = LOWER('{dataset_id}')
-                and LOWER(resource_id) = LOWER('{resource_id}')
-                and LOWER(service) = LOWER('{source_service}');
+                and LOWER(resource_id) = LOWER('{resource_id}')                  
+                and LOWER(service) = LOWER('{source_service}')   
+                and LOWER(format) = LOWER('{fmt}');
         """
+        if tstart and tend:
+            ts = tstart.strftime("%Y-%m-%dT%H:%M:%S")
+            te = tend.strftime("%Y-%m-%dT%H:%M:%S")
+            query = query.replace(";", f"and data_from >= '{ts}' and data_to <= '{te}';")
+
         df = self.mc.db.dataframe_from_query(query)
-        self.entries = df
+        zrs = [ZenodoResource(row) for _, row in df.iterrows()]
 
-        assert len(df["doi"].unique()) < 2, f"Multiple DOIs registered detected for dataset {dataset_id}!"
-        assert len(df["zenodo_record"].unique()) < 2, f"Multiple zenodo_records registered detected for dataset {dataset_id}!"
-
-        doi = str(df["doi"].values[0])
-        zenodo_record = str(df["zenodo_record"].values[0])
-
-        if doi == "None": doi = ""
-        if zenodo_record == "None": zenodo_record = ""
-
-        self.info(f"Found {len(df)} files to be uploaded")
-
+        if yearly:
+            # Make sure that all files are of one year, otherwise everything will break
+            if not is_exactly_one_year_interval(df):
+                self.error(df)
+                self.error("The provided datasets are not organized in a yearly manner!", exception=ValueError)
 
         # download all datasets as threads
         threads = []
-        datasets = []
-        for _, row in df.iterrows():
-            d = RemoteDataset(row["url"], row["path"], row["host"])
-            t = Thread(target=d.download)
+        for zr in zrs:
+            t = Thread(target=zr.download)
             t.start()
             threads.append(t)
-            datasets.append(d)
 
         [t.join() for t in threads]  # wait all tasks to finish
+        resources_by_year = {}
+        if yearly:
+            self.info(f"Creating yearly zenodo records")
+            for zr in zrs:
+                if zr.year not in resources_by_year.keys():
+                    resources_by_year[zr.year] = []
+                resources_by_year[zr.year].append(zr)
+            return list(resources_by_year.values())
 
-        return sorted([Path(d.file) for d in datasets]), doi, zenodo_record, linked_resource, source_service
+        else:
+            return [zrs]
 
 
-    def process_zenodo_resource(self, dataset_conf: dict, resource: dict, publish=False) -> dict:
+    def process_zenodo_resource(self,dataset_conf: dict,resource: dict,publish=False,
+                                tstart: pd.Timestamp | None = None,tend: pd.Timestamp | None = None) -> dict:
         """
         Logic:
         - if CLI says sandbox/prod, use that environment
@@ -167,108 +354,127 @@ class ZenodoClient(LoggerSuperclass):
         """
         dataset_id = dataset_conf["#id"]
         api_base = self.url
-
         access_right = resource.get("access_right", "open")
         license_id = resource.get("license", "cc-by-4.0")
         resource_type = resource.get("resource_type", "dataset")
         token = self.token
 
-        files, doi, zenodo_record, linked_resource, source_service = self.resolve_zenodo_resource(dataset_conf, resource)
+        yearly_record = dataset_conf["export"]["zenodo"].get("yearlyRecord", False)
 
-        assert_type(doi, str)
-        assert_type(zenodo_record, str)
+        zenodo_resources = self.resolve_zenodo_resource(dataset_conf, resource, tstart=tstart, tend=tend, yearly=yearly_record)
 
-        self.info(f"Datsaet_id: {dataset_id}, DOI:{doi}, zenodo_record:{zenodo_record}")
-        self.debug(f"{dataset_id} files:")
-        for i, f in enumerate(files):
-            self.debug(f"    {i+1}/{len(files)} - {f.name}")
+        # files, doi, zenodo_record, linked_resource, source_service = \
+        for resources in zenodo_resources:
+            for resource in resources:
+                self.info(resource)
 
-        title = dataset_conf.get("title") or resource.get("title") or dataset_id
+            doi = resources[0].doi
+            zenodo_record = resources[0].zenodo_record
 
-        payload_create = {
-            "access": self.map_access_right(access_right),
-            "files": {"enabled": True},
-            "metadata": {
-                "title": title,
-                "description": self.build_readme(dataset_conf, files),
-                "publication_date": datetime.now(timezone.utc).date().isoformat(),
-                "publisher": "Zenodo",
-                "resource_type": {"id": resource_type},
-                "creators": self.build_creators(dataset_conf),
-                "license": {"id": license_id},
-                # "related_identifiers": related_identifiers,
-                "funding": self.build_grants(dataset_conf),
-                "subjects": self.build_keywords(dataset_conf)
-            },
-        }
+            assert_type(doi, str)
+            assert_type(zenodo_record, str)
 
-        payload_update = {
-            "access": payload_create["access"],
-            "metadata": payload_create["metadata"],
-        }
+            self.info(f"Datsaet_id: {dataset_id}, DOI:{doi}, zenodo_record:{zenodo_record}")
+            self.debug(f"{dataset_id} files:")
+            for i, zr in enumerate(resources):
+                self.debug(f"    {i+1}/{len(resources)} - {zr.basename}")
 
-        uploaded_files = {}
-        if not zenodo_record:
-            self.info("No previous record detected. Creating new draft.")
-            draft = self.rdm_create_draft_record(api_base, token, payload_create)
-            record_id = draft["id"]
+            title = dataset_conf["export"]["zenodo"].get("title", "")
+            if not title:
+                title = dataset_conf.get("title") or resource.get("title") or dataset_id
 
-        else:
-            if doi:
-                self.info(f"Published record detected ({zenodo_record}) with DOI {doi}. Creating new version.")
-                current_version = self.rdm_get_current_version(api_base, token, zenodo_record)
-                uploaded_files = self.get_uploaded_files(current_version)
-                draft = self.rdm_create_new_version_draft(api_base, token, int(zenodo_record))
+            if "@year@" in title:
+                # Assuming yearly dataset
+                title = title.replace("@year@", str(resources[0].year))
+
+            payload_create = {
+                "access": self.map_access_right(access_right),
+                "files": {"enabled": True},
+                "metadata": {
+                    "title": title,
+                    "description": self.build_readme(dataset_conf, resources),
+                    "publication_date": datetime.now(timezone.utc).date().isoformat(),
+                    "publisher": "Zenodo",
+                    "resource_type": {"id": resource_type},
+                    "creators": self.build_creators(dataset_conf),
+                    "license": {"id": license_id},
+                    # "related_identifiers": related_identifiers,
+                    "funding": self.build_grants(dataset_conf),
+                    "subjects": self.build_keywords(dataset_conf)
+                },
+            }
+
+            payload_update = {
+                "access": payload_create["access"],
+                "metadata": payload_create["metadata"],
+            }
+
+            uploaded_files = {}
+            if not zenodo_record:
+                self.info("No previous record detected. Creating new draft.")
+                draft = self.rdm_create_draft_record(api_base, token, payload_create)
                 record_id = draft["id"]
-                draft = self.rdm_update_draft_record(api_base, token, record_id, payload_update)
-                self.rdm_import_previous_version_files(api_base, token, record_id)
+
             else:
-                self.info(f"Draft record detected ({zenodo_record}). Updating draft.")
-                draft = self.rdm_update_draft_record(api_base, token, int(zenodo_record), payload_update)
-                record_id = draft["id"]
+                if doi:
+                    self.info(f"Published record detected ({zenodo_record}) with DOI {doi}. Creating new version.")
+                    current_version = self.rdm_get_current_version(api_base, token, zenodo_record)
+                    uploaded_files = self.get_uploaded_files(current_version)
+                    draft = self.rdm_create_new_version_draft(api_base, token, int(zenodo_record))
+                    record_id = draft["id"]
+                    draft = self.rdm_update_draft_record(api_base, token, record_id, payload_update)
+                    self.rdm_import_previous_version_files(api_base, token, record_id)
+                else:
+                    self.info(f"Draft record detected ({zenodo_record}). Updating draft.")
+                    draft = self.rdm_update_draft_record(api_base, token, int(zenodo_record), payload_update)
+                    record_id = draft["id"]
 
 
-        self.info(f"Record ready for {dataset_id}:{resource['id']} -> {record_id}")
+            self.info(f"Record ready for {dataset_id} -> {record_id}")
 
-        filenames = [p.name for p in files]
-        self.rdm_start_file_uploads(api_base, token, record_id, filenames)
+            resources_to_upload = []
+            for zr in resources:
+                if zr.basename in uploaded_files.keys() and zr.md5 == uploaded_files[zr.basename]:
+                    self.info(f"Skipping {zr.basename}, md5 hash matches!")
+                    continue
+                resources_to_upload.append(zr)
 
-        files_to_upload = []
-        for f in files:
-            basename = os.path.basename(f)
-            if basename in uploaded_files.keys() and get_file_md5(f) == uploaded_files[basename]:
-                self.info(f"Skipping {f}, md5 hash matches!")
-                continue
-            files_to_upload.append(f)
+            # Delete from draft old versions of the files
+            draft_files = self.rdm_list_draft_files(api_base, token, record_id)
+            draft_file_keys = {f["key"] for f in draft_files}
+            for zr in resources_to_upload:
+                if zr.basename in draft_file_keys:
+                    self.info(f"Removing existing draft copy of {zr.basename} before re-upload")
+                    self.rdm_delete_draft_file(api_base, token, record_id, zr.basename)
 
-        t = time.time()
-        uploaded = 0
-        for f in files_to_upload:
-            local_f = self.ensure_local_file(f)
-            self.info(f"Uploading {local_f} ({human_readable_bytes(local_f.stat().st_size)})")
-            self.rdm_upload_file_content(api_base, token, record_id, f.name, local_f)
-            uploaded += 1
+            self.rdm_start_file_uploads(api_base, token, record_id, resources_to_upload)
 
-        total_size = sum([f.stat().st_size for f in files])
-        self.info(f"Uploading {uploaded} files with a total size of {human_readable_bytes(total_size)} took {time.time() - t:.2f} seconds.")
+            t = time.time()
+            uploaded = 0
+            for zr in resources_to_upload:
+                f = Path(zr.local_file)
+                self.info(f"Uploading {zr.basename} ({human_readable_bytes(f.stat().st_size)})")
+                self.rdm_upload_file_content(api_base, token, record_id, zr)
+                uploaded += 1
 
-        if publish:
-            pub = self.rdm_publish_record(api_base, token, record_id)
-            zenodo_record = str(draft["id"])
-            self.store_zenodo_record(zenodo_record, source_service)
-            doi = pub["doi"]
-            self.info(f"PUBLISHED {dataset_id}:{resource['id']} DOI: {doi}")
-            self.store_doi(doi, source_service)
-            self.submit_to_communities(api_base, token, zenodo_record, dataset_conf)
-            ret =  pub
-        else:
-            self.info(f"Draft kept unpublished for {dataset_id}:{resource['id']}")
-            zenodo_record = str(draft["id"])
-            self.store_zenodo_record(zenodo_record, source_service)
-            ret = draft
+            total_size = sum([zr.get_file_size() for zr in resources_to_upload])
+            self.info(f"Uploading {uploaded} files with a total size of {human_readable_bytes(total_size)} took {time.time() - t:.2f} seconds.")
+
+            if publish:
+                pub = self.rdm_publish_record(api_base, token, record_id)
+                zenodo_record = str(draft["id"])
+                self.store_zenodo_record(zenodo_record, resources)
+                doi = pub["doi"]
+                self.info(f"PUBLISHED {dataset_id} DOI: {doi}")
+                self.store_doi(doi, resources)
+                self.submit_to_communities(api_base, token, zenodo_record, dataset_conf)
+
+            else:
+                self.info(f"Draft kept unpublished for {dataset_id}")
+                zenodo_record = str(draft["id"])
+                self.store_zenodo_record(zenodo_record, resources)
 
 
-        return ret
 
     def get_uploaded_files(self, current: dict):
         files = {}
@@ -277,35 +483,48 @@ class ZenodoClient(LoggerSuperclass):
             files[f["key"]] = md5
         return files
 
-    def store_zenodo_record(self, zenodo_record: str, service: str):
+    def store_zenodo_record(self, zenodo_record: str, resources: List[ZenodoResource]):
         """
         Stores zenodo record to dataset_registry
         :param zenodo_record:
         :return:
         """
         assert_type(zenodo_record, str)
-        assert_type(service, str)
+        assert_type(resources, list)
+        [assert_type(zr, ZenodoResource) for zr in resources]
+        zr = resources[0]
+        dataset_id = zr.dataset_id
+        resource_id = zr.resource_id
+        service = zr.service
+        data_from = [z.data_from for z in resources]
+        data_to = [z.data_to for z in resources]
 
-        dataset_id = self.entries["dataset_id"].values[0]
-        resource_id = self.entries["resource_id"].values[0]
-        data_from = self.entries["data_from"].to_list()
-        data_to = self.entries["data_to"].to_list()
         self.mc.update_zenodo_record(dataset_id, resource_id, service, data_from, data_to, zenodo_record)
+        for zr in resources:
+            self.info(f"Setting Record to {zenodo_record}, resource {zr}")
+            zr.zenodo_record = str(zr.zenodo_record)
 
-    def store_doi(self, doi: str, service: str):
+
+    def store_doi(self, doi: str, resources: List[ZenodoResource]):
         """
         Stores zenodo DOI to dataset_registry
         :param zenodo_record:
         :return:
         """
         assert_type(doi, str)
-        assert_type(service, str)
+        assert_type(resources, list)
+        [assert_type(zr, ZenodoResource) for zr in resources]
+        zr = resources[0]
+        dataset_id = zr.dataset_id
+        resource_id = zr.resource_id
+        service = zr.service
+        data_from = [z.data_from for z in resources]
+        data_to = [z.data_to for z in resources]
 
-        dataset_id = self.entries["dataset_id"].values[0]
-        resource_id = self.entries["resource_id"].values[0]
-        data_from = self.entries["data_from"].to_list()
-        data_to = self.entries["data_to"].to_list()
         self.mc.update_doi(dataset_id, resource_id, service, data_from, data_to, doi)
+        for zr in resources:
+            self.info(f"Setting DOI to {doi}, resource {zr}")
+            zr.zenodo_record = str(zr.zenodo_record)
 
     def build_grants(self, dataset_conf: dict):
         # Add Zenodo communities
@@ -428,14 +647,18 @@ class ZenodoClient(LoggerSuperclass):
         # Build keywords based on EMSO Metadata Objects
         keywords = [emso.keywords.keyword_from_label(key_txt) for key_txt in keywords_text]
 
-        zenodo_supported_vocabularies = ["gemet", "euroscivoc"]
 
         for keyword in keywords:
-            if keyword.vocab_name.lower() in zenodo_supported_vocabularies:
-                # zenodo_keywords.append({"id": keyword.uri})
-                # TODO: Process keywords properly!
+            if keyword.vocab_name.lower() in "gemet":
                 keyword_id = keyword.vocab_name.lower() + ":concept/" + keyword.uri.split("/")[-1]
                 zenodo_keywords.append({"id": keyword_id})
+            elif keyword.vocab_name.lower() in "euroscivoc":
+                term = self.euroscivoc.resolve(keyword.name)
+                if not term:
+                    self.info(f"Could not resolve {keyword.name} to EuroSciVoc")
+                    zenodo_keywords.append({"subject": keyword.name})
+                else:
+                    zenodo_keywords.append(term)
             else:
                 zenodo_keywords.append({"subject": keyword.name})
         return zenodo_keywords
@@ -582,27 +805,6 @@ class ZenodoClient(LoggerSuperclass):
             return p
         raise ValueError(f"Cannot map local path to fileserver URL: {local_path}")
 
-    def ensure_local_file(self, path: Path) -> Path:
-        if path.exists():
-            self.debug(f"Local file found: {path}")
-            return path
-
-        url = self.path_to_fileserver_url(str(path))
-
-        self.info(f"Local file missing, downloading from fileserver: {url}")
-
-        tmp_dir = Path("/tmp/zenodo_upload_cache")
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        tmp_path = tmp_dir / path.name
-
-        r = requests.get(url, stream=True, timeout=300)
-        self.http_response(r)
-
-        with open(tmp_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-
         self.info(f"Downloaded file to temporary cache: {tmp_path}")
         return tmp_path
 
@@ -643,31 +845,17 @@ class ZenodoClient(LoggerSuperclass):
         data = r.json()
         return data.get("entries", [])
 
-    def rdm_start_file_uploads(self, api_base: str, token: str, record_id: str | int, filenames: list[str]) -> set[str]:
+    def rdm_start_file_uploads(self, api_base: str, token: str, record_id: str | int, zresources: List[ZenodoResource]):
         url = f"{api_base}/records/{record_id}/draft/files"
-
-        existing = {
-            entry.get("key")
-            for entry in self.rdm_list_draft_files(api_base, token, record_id)
-            if entry.get("key")
-        }
-
-        missing = [fn for fn in filenames if fn not in existing]
-        self.debug(f"Missing files {missing}")
-
-        if not missing:
-            self.debug("All file entries already exist in draft")
-            return set()
-
-        body = [{"key": fn} for fn in missing]
+        files = [zr.basename for zr in zresources]
+        body = [{"key": fn} for fn in files]
         r = requests.post(url, json=body, headers=self.zenodo_headers(token, True), timeout=60)
         self.http_response(r)
-        return set(missing)
 
-    def rdm_upload_file_content(self, api_base: str, token: str, record_id: str | int, filename: str, file_path: Path) -> None:
-        url = f"{api_base}/records/{record_id}/draft/files/{filename}/content"
+    def rdm_upload_file_content(self, api_base: str, token: str, record_id: str | int, zresource: ZenodoResource) -> None:
+        url = f"{api_base}/records/{record_id}/draft/files/{zresource.basename}/content"
 
-        with file_path.open("rb") as f:
+        with open(zresource.local_file, "rb") as f:
             r = requests.put(
                 url,
                 data=f,
@@ -676,7 +864,7 @@ class ZenodoClient(LoggerSuperclass):
             )
 
         self.http_response(r)
-        self.rdm_commit_file(api_base, token, record_id, filename)
+        self.rdm_commit_file(api_base, token, record_id, zresource.basename)
 
     def http_response(self, r):
         try:
@@ -704,6 +892,11 @@ class ZenodoClient(LoggerSuperclass):
         self.http_response(r)
         return r.json()
 
+    def rdm_delete_draft_file(self, api_base: str, token: str, record_id: str | int, filename: str) -> None:
+        url = f"{api_base}/records/{record_id}/draft/files/{filename}"
+        r = requests.delete(url, headers=self.zenodo_headers(token), timeout=60)
+        self.http_response(r)
+
     def map_access_right(self, access_right: str) -> dict:
         ar = (access_right or "open").strip().lower()
         if ar == "open":
@@ -725,29 +918,41 @@ class ZenodoClient(LoggerSuperclass):
         )
         self.http_response(r)
 
-    def __md_process_sensors(self, text: str, metadata_list: list ):
+    def __md_process_sensors(self, text: str, metadata_list: list, metadata2: dict):
         assert_type(text, str)
         assert_type(metadata_list, list)
         [assert_type(x, dict) for x in metadata_list]
-        key = "$sensors$"
+        key = "@sensors@"
         if key not in text: return text
 
         sensors = []
-        for meta in metadata_list:
-            for varname, varmeta in meta["variables"].items():
-                if varmeta.get("variable_type", "") == "sensor":
-                    name = varmeta.get("long_name", "")
-                    if name and name not in sensors:
-                        sensors.append(name)
+        if metadata_list:
+            # Get info from NetCDF files
+            for meta in metadata_list:
+                for varname, varmeta in meta["variables"].items():
+                    if varmeta.get("variable_type", "") == "sensor":
+                        name = varmeta.get("sdn_instrument_name", "")
+                        if not name:
+                            name = varmeta.get("long_name", "")
+                        if not name:
+                            raise LookupError(f"Could not get sensor name for '{varname}'")
 
+                        if name and name not in sensors:
+                            sensors.append(name)
+        else:
+            # Get info from MMAPI DB
+            for sensor in metadata2["sensors"].values():
+                sensors.append(sensor["long_name"])
+
+        sensors = np.unique(sensors).tolist()
         sensors_text =  ", ".join(sensors)
         return text.replace(key, sensors_text)
 
-    def __md_process_platforms(self, text: str, metadata_list: list):
+    def __md_process_platforms(self, text: str, metadata_list: list,  metadata2: dict):
         assert_type(text, str)
         assert_type(metadata_list, list)
         [assert_type(x, dict) for x in metadata_list]
-        key = "$platforms$"
+        key = "@platforms@"
         if key not in text: return text
 
         platforms = []
@@ -760,30 +965,24 @@ class ZenodoClient(LoggerSuperclass):
                     if name and name not in platforms:
                         platforms.append(name)
 
+        platforms = np.unique(platforms).tolist()
+
         platforms_text = ", ".join(platforms)
         return text.replace(key, platforms_text)
 
-    def __md_process_coordinates(self, text: str, metadata_list: list):
+    def __md_process_coordinates(self, text: str, resources: List[ZenodoResource]):
         assert_type(text, str)
-        assert_type(metadata_list, list)
-        [assert_type(x, dict) for x in metadata_list]
-        key = "$coordinates$"
+        assert_type(resources, list)
+        [assert_type(x, ZenodoResource) for x in resources]
+        key = "@coordinates@"
         if key not in text: return text
 
-        lats_min = []
-        lats_max = []
-        lons_min = []
-        lons_max = []
-        depths_min = []
-        depths_max = []
-
-        for meta in metadata_list:
-            lats_min.append(meta["global"]["geospatial_lat_min"])
-            lats_max.append(meta["global"]["geospatial_lat_max"])
-            lons_min.append(meta["global"]["geospatial_lon_min"])
-            lons_max.append(meta["global"]["geospatial_lon_max"])
-            depths_min.append(meta["global"]["geospatial_vertical_min"])
-            depths_max.append(meta["global"]["geospatial_vertical_max"])
+        lats_min = [z.lat_min for z in resources]
+        lats_max = [z.lat_max for z in resources]
+        lons_min = [z.lon_min for z in resources]
+        lons_max = [z.lon_max for z in resources]
+        depths_min = [z.depth_min for z in resources]
+        depths_max = [z.depth_max for z in resources]
 
         lat_min = min(lats_min)
         lat_max = max(lats_max)
@@ -812,31 +1011,27 @@ class ZenodoClient(LoggerSuperclass):
 
         return text.replace(key, coordinates_text)
 
-    def __md_process_temporal_coverage(self, text: str, metadata_list: list):
+    def __md_process_temporal_coverage(self, text: str, resources: List[ZenodoResource]):
         assert_type(text, str)
-        assert_type(metadata_list, list)
-        [assert_type(x, dict) for x in metadata_list]
-        key = "$temporal_coverage$"
+        assert_type(resources, list)
+        [assert_type(x, ZenodoResource) for x in resources]
+        key = "@temporal_coverage@"
         if key not in text: return text
 
-        tmins = []
-        tmaxs = []
+        time_mins = [z.time_min for z in resources]
+        time_maxs = [z.time_max for z in resources]
 
-        for meta in metadata_list:
-            tmins.append(pd.Timestamp(meta["global"]["time_coverage_start"]))
-            tmaxs.append(pd.Timestamp(meta["global"]["time_coverage_end"]))
-
-        tmin = min(tmins).strftime("%Y-%m-%d")
-        tmax = max(tmaxs).strftime("%Y-%m-%d")
+        tmin = min(time_mins).strftime("%Y-%m-%d")
+        tmax = max(time_maxs).strftime("%Y-%m-%d")
 
         time_text = f"from {tmin} to {tmax}"
         return text.replace(key, time_text)
 
-    def __md_process_varibale_table(self, text: str, metadata_list: list):
+    def __md_process_varibale_table(self, text: str, metadata_list: list, metadata2: dict):
         assert_type(text, str)
         assert_type(metadata_list, list)
         [assert_type(x, dict) for x in metadata_list]
-        key = "$variable_table$"
+        key = "@variable_table@"
 
         variables = []  # list of lists (name, description, units)
         processed_vars = []
@@ -844,6 +1039,7 @@ class ZenodoClient(LoggerSuperclass):
             for k, meta in metadata["variables"].items():
                 if k in processed_vars:
                     continue
+
                 else:
                     processed_vars.append(k)
 
@@ -854,7 +1050,6 @@ class ZenodoClient(LoggerSuperclass):
                     variables.append(
                         [k, meta["long_name"], meta["sdn_uom_name"]]
                     )
-
 
                 elif meta["variable_type"] in ["technical", "biological"]:
                     units = meta.get("units", "n/a")
@@ -870,35 +1065,38 @@ class ZenodoClient(LoggerSuperclass):
         return text.replace(key, table)
 
 
-    def build_readme(self, dataset_conf: dict, files: list):
-        """
-        Builds a README from files
-        :param files:
-        :return:
-        """
-
+    def build_readme(self, dataset_conf: dict, resources: List[ZenodoResource]):
         assert_type(dataset_conf, dict)
-        assert_type(files, list)
-        [assert_type(x, Path) for x in files]
+        assert_type(resources, list)
+        [assert_type(x, ZenodoResource) for x in resources]
 
         md_text = dataset_conf["export"]["zenodo"]["&readme"]
 
-        metadata = []
+        files = [z.local_file for z in resources]
 
+        metadata = []
         for f in files:
             if not str(f).endswith(".nc"):
-                self.warning(f"File extension not supported for auto-build readme {f.split('.')[-1]}")
                 continue
             t = time.time()
             m = extract_netcdf_metadata(f)
             self.info(f"Opening {f} as a dict ({time.time() - t:.2f} s)")
             metadata.append(m)
 
-        md_text = self.__md_process_sensors(md_text, metadata)
-        md_text = self.__md_process_platforms(md_text, metadata)
-        md_text = self.__md_process_coordinates(md_text, metadata)
-        md_text = self.__md_process_temporal_coverage(md_text, metadata)
-        md_text = self.__md_process_varibale_table(md_text, metadata)
+        metadata2 = self.dc.metadata_harmonizer_conf(dataset_conf)
+
+        # Metadata can be extracte from 2 different places, directly from NetCDF files (if present) or from the mmapi
+        # database. Extract both and let the __md_process__xxx functions decide the best option. For instance, sensor
+        # metadata is present in both, but temporal and spatial coverage is only in NetCDF files.
+
+        # metadata is a list of NetCDF file metadata
+        # metadata2 is a dict with the mmapi DB metadata
+
+        md_text = self.__md_process_sensors(md_text, metadata, metadata2)
+        md_text = self.__md_process_platforms(md_text, metadata, metadata2)
+        md_text = self.__md_process_coordinates(md_text, resources)
+        md_text = self.__md_process_temporal_coverage(md_text, resources)
+        md_text = self.__md_process_varibale_table(md_text, metadata, metadata2)
         html = markdown.markdown(md_text, extensions=['tables'])
         return html
 

@@ -472,7 +472,6 @@ erddap_resource = {
 zenodo_resource = {
     "type": "object",
     "properties": {
-        "id": {"type": "string", "definition": "ID to be assigned to the resource"},
         "link": {"type": "string", "definition": "link pointing to the online resource"},
         "format": { "type": "string", "enum": dataset_exporter_formats},
         "access_right": {
@@ -480,9 +479,9 @@ zenodo_resource = {
             "enum": ["open", "embargoed", "restricted", "closed"],
         },
         "license": { "type": "string", "default": "cc-by-4.0" },
-        "publish": {"type": "boolean", "default": False }
     },
-    "required": ["id", "link", "access_right"]
+    "additionalProperties": False,
+    "required": ["link", "access_right"]
 }
 
 fileserver_exporter_conf = {
@@ -529,8 +528,15 @@ zenodo_exporter_conf = {
             "minItems": 1,
             "items": zenodo_resource
         },
-        "&readme": {"type": "string", "description": "The README data in markdown. It will be stored as plain txt in the database, but it will be exported as a separate markdown file in the filesystem"},
+        # The README data in markdown. It will be stored as plain txt in the database, but it will be exported as a separate markdown file in the filesystem
+        "&readme": {"type": "string"},
+        # Create a dataset for every year, useful for very big datasets
+        "yearlyRecord": {"type": "boolean"},
+        # This is required when yearlyRecord is activated, the $year$ key will be replaced with the proper year
+        "title": { "type": "string"},
+        "communities":    {"type": "array", "items": {"type": "string"}},
     },
+    "additionalProperties": False,
     "required": ["resources", "&readme"]
 }
 

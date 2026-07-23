@@ -209,13 +209,34 @@ class MetadataCollector(LoggerSuperclass):
                     doc_version SMALLINT,
                     creationDate TIMESTAMPTZ,
                     modificationDate TIMESTAMPTZ,
-                    group VARCHAR(255),
+                    doc_group VARCHAR(255),
                     doc JSONB
                 );
                 """
                 self.db.exec_query(query, fetch=False)
 
-        # Now add dataset registry
+            # Now add dataset registry
+            # dataset_id: ID of the dataset
+            # resource_id: ID of the resource
+            # service: Service (e.g. fileserver, erddap...)
+            # format: file format (csv, netcdf, zip...)
+            # data_from: time period start (e.g. 2020-01-01). It is not the same as the data point start
+            # data_to  time period end (e.g. 2021-01-01). It is not the same as the data point start
+            # path: path to the file in the server
+            # host: host of the server
+            # url: public link to the file, if exists
+            # creation_date: creation date of the resource
+            # modification_date: modification date of the resource
+            # time_min: first           ervation timestamp in the file
+            # time_max: last observation timestamp in the file
+            # lat_min: min latitude
+            # lat_max: max latitude
+            # lon_min: min longitude
+            # lon_max: max longitude
+            # depth_min: min depth
+            # depth_max: max depth
+            # md5: file md5 hash
+
         if self.dataset_registry_table not in table_names:
             query = f"""
             CREATE TABLE IF NOT EXISTS {self.dataset_registry_table}
@@ -226,11 +247,22 @@ class MetadataCollector(LoggerSuperclass):
                     format TEXT NOT NULL,
                     data_from timestamp with time zone,
                     data_to timestamp with time zone,                    
-                    creation_date timestamp with time zone NOT NULL,
-                    modification_date timestamp with time zone NOT NULL,
-                    url TEXT,
                     path TEXT not NULL,    
-                    host TEXT not NULL
+                    host TEXT not NULL,
+                    url TEXT,
+                    creation_date timestamp with time zone NOT NULL,
+                    modification_date timestamp with time zone NOT NULL,                    
+                    time_min  timestamp with time zone NOT NULL,
+                    time_max timestamp with time zone NOT NULL,            
+                    lat_min float NOT NULL,
+                    lat_max float NOT NULL,
+                    lon_min float NOT NULL,
+                    lon_max float NOT NULL,
+                    depth_min float NOT NULL,
+                    depth_max float NOT NULL,
+                    md5 text NOT NULL,
+                    doi TEXT,
+                    zenodo_record TEXT
                 )
             """
             self.db.exec_query(query, fetch=False)
@@ -252,6 +284,7 @@ class MetadataCollector(LoggerSuperclass):
                      doc_version SMALLINT,
                      creationDate TIMESTAMPTZ,
                      modificationDate TIMESTAMPTZ,
+                     doc_group VARCHAR(255),
                      doc JSONB
                  );
                  """
@@ -419,6 +452,8 @@ class MetadataCollector(LoggerSuperclass):
         document["#creationDate"] = now
         document["#modificationDate"] = now
         document["#author"] = author
+        if "#group" not in document.keys():
+            document["#group"] = ""
         self.debug(f"Inserting {document_id} to {collection.lower()}")
         contents = self.strip_metadata_fields(document)
         insert_query = sql.SQL(f"""
@@ -511,7 +546,7 @@ class MetadataCollector(LoggerSuperclass):
         old_document = self.get_document(collection, document_id)  # getting old metadata
 
         old_group = old_document["#group"]
-        new_group = document["#group"]
+        new_group = document.get("#group", "")
 
         metadata = {key: value for key, value in old_document.items() if key.startswith("#")}
         metadata["#version"] += 1
@@ -1249,9 +1284,27 @@ class MetadataCollector(LoggerSuperclass):
         history = sorted(history, key=lambda x: x['time'])
         return history
 
-    def dataset_register(self, dataset_id: str, resource_id: str, service: str, fmt: str,
-                         data_from: pd.Timestamp, data_to: pd.Timestamp, url: str, path: str,
-                         host: str, doi: str = "", zenodo_record: str = ""):
+    def dataset_register(self,
+                         dataset_id: str,
+                         resource_id: str,
+                         service: str,
+                         fmt: str,
+                         data_from: pd.Timestamp,
+                         data_to: pd.Timestamp,
+                         path: str,
+                         host: str,
+                         url: str,
+                         time_min: pd.Timestamp,
+                         time_max: pd.Timestamp,
+                         lat_min: float,
+                         lat_max: float,
+                         lon_min: float,
+                         lon_max: float,
+                         depth_min: float,
+                         depth_max: float,
+                         md5: str,
+                         doi: str = "",
+                         zenodo_record: str = ""):
         """
         Register a dataset into the fileserver_dataset_registry.
         If no entry exists, insert it; otherwise update it.
@@ -1264,9 +1317,19 @@ class MetadataCollector(LoggerSuperclass):
         assert_type(fmt, str)
         assert_type(data_from, pd.Timestamp)
         assert_type(data_to, pd.Timestamp)
-        assert_type(url, str)
         assert_type(path, str)
         assert_type(host, str)
+        assert_type(url, str)
+        assert_type(time_min, pd.Timestamp)
+        assert_type(time_max, pd.Timestamp)
+        assert_type(lat_min, float)
+        assert_type(lat_max, float)
+        assert_type(lon_min, float)
+        assert_type(lon_max, float)
+        assert_type(depth_min, float)
+        assert_type(depth_max, float)
+        assert_type(md5, str)
+
         assert_type(doi, str)
         assert_type(zenodo_record, str)
 
@@ -1287,24 +1350,13 @@ class MetadataCollector(LoggerSuperclass):
                 f"CREATE dataset registry for dataset_id='{dataset_id}' and resource_id='{resource_id}' and service='{service}")
             query = f"""
                 INSERT INTO {self.dataset_registry_table}
-                (dataset_id, resource_id, service, format, data_from, data_to,
-                 creation_date, modification_date, url, path, host, doi, zenodo_record)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (dataset_id, resource_id, service, format, data_from, data_to, path, host, url, creation_date, 
+                modification_date, time_min, time_max, lat_min, lat_max, lon_min, lon_max, depth_min, depth_max, md5)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             params = (
-                dataset_id,
-                resource_id,
-                service,
-                fmt,
-                data_from,  # psycopg2 handles Timestamp
-                data_to,
-                now,  # creation_date
-                now,  # modification_date
-                empty_to_none(url),
-                empty_to_none(path),
-                empty_to_none(host),
-                empty_to_none(doi),
-                empty_to_none(zenodo_record)
+                dataset_id, resource_id, service, fmt, data_from,  data_to, path, host, empty_to_none(url), now, now,
+                time_min, time_max, lat_min, lat_max, lon_min, lon_max, depth_min, depth_max, md5
             )
             self.db.exec_query((query,params), fetch=False)
 
@@ -1312,10 +1364,8 @@ class MetadataCollector(LoggerSuperclass):
             self.info(f"UPDATE dataset registry for dataset_id='{dataset_id}' and resource_id='{resource_id}'")
             query = f"""
                 UPDATE {self.dataset_registry_table}
-                SET modification_date = %s,
-                    path = %s,
-                    url = %s,
-                    host = %s
+                SET modification_date = %s,  path = %s, url = %s, host = %s,  time_min = %s, time_max = %s, 
+                lat_min = %s, lat_max = %s, lon_min = %s, lon_max = %s, depth_min = %s, depth_max = %s, md5 = %s
                 WHERE dataset_id = %s
                   AND resource_id = %s
                   AND service = %s
@@ -1323,15 +1373,10 @@ class MetadataCollector(LoggerSuperclass):
                   AND data_to = %s
             """
             params = (
-                now,  # modification_date
-                empty_to_none(path),  # path
-                empty_to_none(url),  # url
-                empty_to_none(host),  # host
-                dataset_id,  # WHERE condition
-                resource_id,
-                service,
-                data_from,
-                data_to
+                now, path,  empty_to_none(url), host, time_min, time_max, lat_min, lat_max, lon_min, lon_max, depth_min,
+                depth_max, md5,
+                # WHERE condition
+                dataset_id, resource_id, service, data_from, data_to
             )
             self.db.exec_query((query, params), fetch=False)
 

@@ -288,8 +288,19 @@ def run_subprocess(cmd, fail_exit=True):
     else:
         cmd_list = cmd.split(" ")
     cmd_list = [part for part in cmd_list if part]  # avoid empty strings
-    proc = subprocess.run(cmd_list, capture_output=True)
-    stdout = proc.stdout.decode()
+
+    shell = False
+    if "|" in cmd_list:
+        shell = True
+        cmd_list = " ".join(cmd_list)  # force one string for shell
+
+    proc = subprocess.run(cmd_list, capture_output=True, shell=shell)
+
+    if shell:
+        stdout = proc.stdout.decode('utf-8', errors='replace')
+        stderr = proc.stderr.decode('utf-8', errors='replace')
+    else:
+        stdout = proc.stdout.decode()
     if proc.returncode != 0:
         rich.print(f"\n[red]ERROR while running command '{cmd}'")
         if proc.stdout:

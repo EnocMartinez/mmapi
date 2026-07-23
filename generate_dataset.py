@@ -29,7 +29,7 @@ import os
 
 def generate_dataset(dataset_id: str, service_name: str, time_start: pd.Timestamp, time_end: pd.Timestamp, secrets,
                      log: logging.Logger, format:str= "", verbose=False, erddap_config=False, overwrite=False,
-                     resources=[], local=False, publish=False):
+                     resources=[], local=False, publish=False, limit:int=0) :
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -53,7 +53,7 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: pd.Timestam
     mc = init_metadata_collector(secrets, log=log)
     dc = DataCollector(secrets, log, mc=mc)
 
-    dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, secrets=secrets,
+    dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, secrets=secrets, limit=limit,
                         overwrite=overwrite, erddap_config=erddap_config, resources=resources, local=local, publish=publish)
 
 def list_datasets(secrets, verbose=False):
@@ -73,6 +73,7 @@ if __name__ == "__main__":
     argparser.add_argument("dataset_id", help="Dataset ID", type=str)
     argparser.add_argument("services", help="Service name (e.g. ERDDAP, CKAN, etc.)", nargs="+", type=str)
     argparser.add_argument("--list", help="List registered datasets and exit", action="store_true")
+    argparser.add_argument("--limit", help="Limit data queries to N data points, for debugging only", type=int, default=0)
     argparser.add_argument("--local", help="Do not send to destination server", action="store_true")
     argparser.add_argument("--current", help="Generate current dataset, e.g. if monthly from start to end of the current month", action="store_true")
     argparser.add_argument("--last", help="Generate last dataset, e.g. if monthly from start to end of the previous month", action="store_true")
@@ -121,4 +122,4 @@ if __name__ == "__main__":
     for service in args.services:
         generate_dataset(args.dataset_id, service, tstart, tend, args.secrets, log, format=args.format,
                          verbose=args.verbose, erddap_config=args.erddap, overwrite=args.overwrite,
-                         resources=args.resources, local=args.local, publish=args.publish)
+                         resources=args.resources, local=args.local, publish=args.publish, limit=args.limit)
