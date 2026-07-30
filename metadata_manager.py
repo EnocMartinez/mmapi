@@ -10,10 +10,10 @@ license: MIT
 created: 21/09/2023
 """
 from argparse import ArgumentParser, ArgumentError
-
 from mmm import setup_log
 from mmm.common import ask_user_input, dir_list, file_list, assert_type
 from mmm.metadata_collector import MetadataCollector, init_metadata_collector
+from datetime import datetime
 import yaml
 import rich
 import os
@@ -58,6 +58,8 @@ def process_markdown_to_json(doc: dict, filename: str, collection: str):
     :param doc:
     :return:
     """
+    if collection not in ["datasets"]:
+        return doc
     for key, value in doc.items():
         if isinstance(value, str):
             if key.startswith("&") and value.split(".")[-1] == "md":
@@ -285,6 +287,7 @@ if __name__ == "__main__":
     argparser.add_argument("-c", "--collections", help="Only use certain collections", nargs="+", default=[])
     argparser.add_argument("-f", "--folder", help="folder to store all metadata, by default 'Metadata'", type=str, default="Metadata")
     argparser.add_argument("-v", "--verbose", help="Show more info", action="store_true")
+    argparser.add_argument("--restore", help="Restore a previous doc version (--restore <collection> <doc_id> <version>)", type=str, nargs="+", default=[])
     argparser.add_argument("--clear-history", help="Delete ALL history and reset version to 1", action="store_true")
     argparser.add_argument("--healthcheck", help="Ensure all relations", action="store_true")
     argparser.add_argument("--force", help="Force put, ignore all checks", action="store_true")
@@ -334,6 +337,21 @@ if __name__ == "__main__":
     if args.get and args.put:
         raise ArgumentError("Only get or put arguments can be set!")
     init = time.time()
+
+    if args.restore:
+        assert len(args.restore) == 3, "Expected 3 arguments: --restore <collection> <doc_id> <version>"
+        collection, doc_id, version = args.restore
+        rich.print(f"Restoring: {collection} {doc_id} {version}")
+        old_doc = mc.get_document(collection, doc_id, version=int(version))
+        rich.print("[orange3]=== The following version will be recovered ===")
+        rich.print(old_doc)
+        if not ask_user_input("[orange3]continue?"):
+            exit()
+        new_doc = mc.replace_document(collection, doc_id, old_doc, force=args.force)
+        filename = os.path.join(folder, collection, new_doc["#group"], doc_id + ".json")
+        rich.print(f"Storing in filesystem: {filename}")
+        store_doc_to_filesystem(new_doc, filename, collection)
+
     if args.clear:
         rich.print("[red]Deleting all files!")
         clear_temporal_files([folder, folder_hist])
@@ -378,6 +396,17 @@ if __name__ == "__main__":
                 continue
             rich.print(f"action: {action}")
             if action == "replace":
+
+                # replacing a document in the DB. To prevent re-uploading old documents, check that the filesystem
+                # modification time is greater than the actual DB modification time
+                fs_doc = fs_data[collection][document_id]
+                db_doc = db_data[collection][document_id]
+                fs_mtime = os.path.getmtime(os.path.join(folder, collection, fs_doc["#group"], fs_doc["#id"] + ".json"))
+                db_mtime = datetime.fromisoformat(db_doc["#modificationDate"]).timestamp()
+                if not args.force and  db_mtime > fs_mtime:
+                    rich.print(f"[yellow]Ignoring {collection}:{document_id} doc in filesystem is older than in DB! use --force to overwrite")
+                    continue
+
                 mc.replace_document(collection, document_id,  fs_data[collection][document_id], force=args.force)
                 mc.get_document(collection, document_id)  # update the local document
                 replaced += 1
