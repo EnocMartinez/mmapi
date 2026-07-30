@@ -22,7 +22,7 @@ import json
 import pandas as pd
 import os
 from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL, setup_log, assert_type, assert_types, \
-    check_url
+    check_url, strip_metadata_fields
 from mmm.common import LoggerSuperclass
 import psycopg2
 from psycopg2 import sql
@@ -144,6 +144,10 @@ class MetadataCollector(LoggerSuperclass):
         self.__taxa_aphia_dict = {}
 
         host = connection["db_host"]
+
+        if host == os.uname().nodename:
+            host = "localhost"
+
         port = connection["db_port"]
         db_name = connection["db_name"]
         self.db_name = db_name
@@ -176,6 +180,7 @@ class MetadataCollector(LoggerSuperclass):
         # the system and reduce the database workload
         self.__cache_timeout_s = 300  # 5 minutes
         self.__cache = {}
+        self.__sensor_deployment_cache = {}
         self.used_time = 0
 
     def __init_database(self):
@@ -341,7 +346,7 @@ class MetadataCollector(LoggerSuperclass):
         """
         errors = []
         if metadata:
-            errors = validate_schema(doc, mmm_metadata, errors=errors)
+            errors = validate_schema(doc, mmm_metadata, errors=errors, strip_meta=False)
         if collection not in mmm_schemas.keys():
             self.warning(f"WARNING: no schema for '{collection}'")
         else:
@@ -360,14 +365,6 @@ class MetadataCollector(LoggerSuperclass):
         else:
             return True  # document is valid
 
-    @staticmethod
-    def strip_metadata_fields(doc: dict) -> dict:
-        """
-        Takes a document and strips all metadata (id, version, author...)
-        :param doc: dict
-        :return: cleaned document
-        """
-        return {key: value for key, value in doc.items() if not key.startswith("#")}
 
     def get_identifiers(self, collection, history=False):
         """
@@ -455,7 +452,7 @@ class MetadataCollector(LoggerSuperclass):
         if "#group" not in document.keys():
             document["#group"] = ""
         self.debug(f"Inserting {document_id} to {collection.lower()}")
-        contents = self.strip_metadata_fields(document)
+        contents = strip_metadata_fields(document)
         insert_query = sql.SQL(f"""
             INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -478,7 +475,7 @@ class MetadataCollector(LoggerSuperclass):
         modification_date = document["#modificationDate"]
         group = document["#group"]
 
-        contents = self.strip_metadata_fields(document)
+        contents = strip_metadata_fields(document)
         insert_query = sql.SQL(f"""
             INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc, doc_group)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -558,7 +555,7 @@ class MetadataCollector(LoggerSuperclass):
         old_contents = {key: value for key, value in old_document.items() if not key.startswith("#")}
 
         # keep only elements that are not metadata
-        contents = self.strip_metadata_fields(document)
+        contents = strip_metadata_fields(document)
         new_document = metadata  # start new document with metadata
         new_document.update(contents)  # add contents after metadata
 
@@ -1143,6 +1140,12 @@ class MetadataCollector(LoggerSuperclass):
             pass
         else:
             raise ValueError(f"Wrong type in station, expected str or dict, got {type(sensor)}")
+
+        if sensor_id in self.__sensor_deployment_cache.keys():
+            deployments, t = self.__sensor_deployment_cache[sensor_id]
+            if time.time() - t < self.__cache_timeout_s:
+                return deployments
+
         try:
             deployments = self.__get_deployments("sensors", sensor_id)
         except LookupError:
@@ -1167,6 +1170,8 @@ class MetadataCollector(LoggerSuperclass):
                     elif isinstance(dep["end"], type(None)):
                         deployments_inside_interval.append(dep)
             deployments = deployments_inside_interval
+
+        self.__sensor_deployment_cache[sensor_id] = (deployments, time.time())
         return deployments
 
     def get_sensor_deployment(self, sensor: dict | str, timestamp: pd.Timestamp) -> Tuple[float, float, float, dict]:

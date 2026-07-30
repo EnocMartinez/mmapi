@@ -80,6 +80,10 @@ class DataCollector(LoggerSuperclass):
 
         self.boundaries = None
 
+        self.erddap_url = secrets["erddap"].get("url", None)
+        if not self.erddap_url:
+            self.error("Cannot parse erddap url from settings!", exception=ValueError)
+
     def dataset_filename(self, dataset: dict, fmt: str, tstart: pd.Timestamp, tend: pd.Timestamp,
                          tmp_folder="temp") -> str:
         """
@@ -245,7 +249,7 @@ class DataCollector(LoggerSuperclass):
     def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str = "",
                          time_end: pd.Timestamp|str = "", fmt: str = "", overwrite=False, erddap_config=False,
                          secrets: dict=None, resources: dict = None, local=False, publish=False,
-                         limit:int = 0) -> List[DatasetObject,]:
+                         limit:int = 0, no_files=False) -> List[DatasetObject,]:
         """
 
         :param dataset: dataset_id or dataset configuration dict
@@ -289,7 +293,7 @@ class DataCollector(LoggerSuperclass):
         elif service_name == "zenodo":
             if not self.zenodo:
                 self.error("Zenodo not initialized!", exception=ValueError)
-            return self.zenodo.process_mmapi_dataset(conf, resources=resources, publish=publish, tstart=time_start, tend=time_end)
+            return self.zenodo.process_mmapi_dataset(conf, resources=resources, publish=publish, tstart=time_start, tend=time_end, no_files=no_files, overwrite=overwrite)
 
         datasets = []
 
@@ -301,22 +305,7 @@ class DataCollector(LoggerSuperclass):
 
         for resource in resources_obj:
             time_start, time_end = self.resolve_time_coverage(conf, resource, time_start, time_end)
-            datasets += self.generate_dataset_tree(conf, service_name, resource, time_start, time_end, limit=limit, fmt=fmt,overwrite=overwrite)
-
-        # Avoid None datasets
-        datasets = [d for d in datasets if d]
-
-        if local:
-            for dataset in datasets:
-                self.info(f"Local file stored in {dataset.filename}")
-                self.warning(f"Not registering in metadata database datasets in dataset_registry!")
-                return datasets
-
-        self.info("Delivering and registering datasets")
-        for dataset in datasets:
-            if dataset:
-                # Deliver and register dataset in fileserver_datasets_registry
-                dataset.deliver_and_register()
+            datasets += self.generate_dataset_tree(conf, service_name, resource, time_start, time_end, limit=limit, fmt=fmt,overwrite=overwrite, local=local)
 
         if service_name == "erddap" and erddap_config:
             try:
@@ -342,7 +331,7 @@ class DataCollector(LoggerSuperclass):
         return datasets
 
     def generate_dataset_tree(self,  dataset: dict, service_name: str, resource: dict, time_start: pd.Timestamp,
-                              time_end: pd.Timestamp, fmt: str="", overwrite=False, limit:int=0):
+                              time_end: pd.Timestamp, fmt: str="", overwrite=False, limit:int=0, local=False):
         assert_type(service_name, str)
         assert_types(dataset, [dict, str])
         assert_types(time_start, [pd.Timestamp, type(None)])
@@ -359,13 +348,15 @@ class DataCollector(LoggerSuperclass):
 
         datasets = []
         for tstart, tend in intervals:
-            d = self.generate_dataset_file(conf, service_name, resource, tstart, tend, fmt=fmt, overwrite=overwrite, limit=limit)
-            datasets.append(d)
+            d = self.generate_dataset_file(conf, service_name, resource, tstart, tend, fmt=fmt, overwrite=overwrite, limit=limit, local=local)
+            if d and not local:
+                datasets.append(d)
+                d.deliver_and_register()
 
         return datasets
 
     def generate_dataset_file(self, conf: dict, service_name: str, resource: dict, time_start: pd.Timestamp,
-                              time_end: pd.Timestamp, fmt: str = "", overwrite=False, limit: int=0) -> DatasetObject|None:
+                              time_end: pd.Timestamp, fmt: str = "", overwrite=False, limit: int=0, local=False) -> DatasetObject|None:
         """
         Generates a dataset based on its configuration stored in Metadata DB
         :param conf: #id of the dataset
@@ -405,7 +396,7 @@ class DataCollector(LoggerSuperclass):
         if fmt == "csv":
             filename, delivered = self.csv_from_sta(conf, resource, time_start, time_end)
         elif fmt == "netcdf":
-            filename, delivered = self.netcdf_from_sta(conf, resource, time_start, time_end)
+            filename, delivered = self.netcdf_from_sta(conf, resource, time_start, time_end, limit=limit)
         elif fmt == "zip":
             filename, delivered = self.zip_from_filesystem(conf, resource, time_start, time_end, limit=limit, overwrite=overwrite)
         elif fmt == "dwca":
@@ -422,14 +413,14 @@ class DataCollector(LoggerSuperclass):
         return obj
 
     def dataframe_from_sta(self, conf: dict, station_ids: list, sensor_ids: list, resource: dict, time_start: pd.Timestamp,
-                           time_end: pd.Timestamp) -> pd.DataFrame:
+                           time_end: pd.Timestamp, limit=0) -> pd.DataFrame:
         assert_type(station_ids, list)
         assert_type(sensor_ids, list)
         [assert_type(s, str) for s in station_ids]
         [assert_type(s, str) for s in sensor_ids]
         data_type = resource["dataType"]
         if data_type == "timeseries":
-            df = self.dataframe_from_sta_timeseries(conf, resource, station_ids, sensor_ids, time_start, time_end)
+            df = self.dataframe_from_sta_timeseries(conf, resource, station_ids, sensor_ids, time_start, time_end, limit=limit)
         elif data_type == "detections":
             df = self.dataframe_from_sta_detections(conf, resource, station_ids, sensor_ids, time_start, time_end)
         elif data_type == "profiles":
@@ -673,7 +664,7 @@ class DataCollector(LoggerSuperclass):
         return df
 
     def dataframe_from_sta_timeseries(self, conf: dict, resource: dict, station_ids: list, sensor_ids: list, time_start: pd.Timestamp = None,
-                                      time_end: pd.Timestamp = None):
+                                      time_end: pd.Timestamp = None, limit=0):
         """
         Returns a DataFrame for a specific Sensor in a specific time interval
         """
@@ -687,7 +678,7 @@ class DataCollector(LoggerSuperclass):
         except KeyError:
             avg_period=""
 
-        df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end)
+        df = self.dataframe_from_sta_generic(station_ids, sensor_ids, data_type, average=avg_period, tstart=time_start, tend=time_end, limit=limit)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
         df = df[["timestamp", "depth", "latitude", "longitude", "value", "qc_flag", "variable", "sensor_id", "platform_id"]]
         df = pivot_dataframe(df, pivot_cols=["value", "qc_flag"])
@@ -770,7 +761,7 @@ class DataCollector(LoggerSuperclass):
         df = df[["timestamp", "depth", "latitude", "longitude", "value", "parameters", "variable", "sensor_id", "platform_id", "foi"]]
         return df.set_index("timestamp")
 
-    def netcdf_from_sta(self, conf: dict, resource: dict, time_start: pd.Timestamp, time_end: pd.Timestamp):
+    def netcdf_from_sta(self, conf: dict, resource: dict, time_start: pd.Timestamp, time_end: pd.Timestamp, limit=0):
         """
         Creates a NetCDF file according to the configuration
         :param conf:
@@ -787,7 +778,7 @@ class DataCollector(LoggerSuperclass):
 
         self.info(msg)
         metadata = self.metadata_harmonizer_conf(conf)
-        df = self.dataframe_from_sta(conf, conf["@stations"], conf["@sensors"], resource, time_start=time_start, time_end=time_end)
+        df = self.dataframe_from_sta(conf, conf["@stations"], conf["@sensors"], resource, time_start=time_start, time_end=time_end, limit=limit)
         df = df_netcdf_normalization(df)  # Ensure we have correct strings
         if df.empty:
             self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skipping")
@@ -807,7 +798,7 @@ class DataCollector(LoggerSuperclass):
         :param conf:
         :param time_start: time start to filter the data
         :param time_end: time start
-        :return: generated NetCDF filename
+        :return: generated NetCDF filenameOBSEA_seabed_station_BGC_L1b
         """
         self.info("Creating Darwin Core Archive dataset")
         assert resource["dataType"] == "json", f"Darwin Core only works with JSON data, got '{resource['dataType']}'"
@@ -850,7 +841,7 @@ class DataCollector(LoggerSuperclass):
         """
         dataset_id = conf["#id"]
 
-        # Create the dataset in /var/tmp
+        # Create the dataset in /opt/temp
         self.info(f"Creating ZIP dataset, ID: {conf['#id']}, from {time_start} to {time_end}")
 
 
@@ -870,14 +861,14 @@ class DataCollector(LoggerSuperclass):
                                              tend=time_end, fois=fois, limit=limit)
         # DataFrame columns: timestamp, depth, value, qc_flag, time_end, parameters, variable, sensor_id, platform_id, foi
         df = df[["timestamp", "value", "sensor_id", "platform_id", "foi"]]
-        df = df.rename(columns={"value": "urls"})
+        df = df.rename(columns={"value": "URL"})
         if df.empty:
             self.error(f"could not generate dataset {conf['#id']}:{resource['id']} from {time_start} to {time_end}")
             return "", False
 
-        remote_filename = self.dataset_filename(conf, "zip", time_start, time_end, tmp_folder="/var/tmp")
+        remote_filename = self.dataset_filename(conf, "zip", time_start, time_end, tmp_folder="/opt/temp")
 
-        tmp_folder = f"/var/tmp/{datetime.datetime.now().strftime('%s')}/{dataset_id}"
+        tmp_folder = f"/opt/temp/{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
         # Now we will do the following:
         # 1. Create a temporal folder in /var/temp/<epochtime>
@@ -892,7 +883,7 @@ class DataCollector(LoggerSuperclass):
         #    3.3 send the zip file to its destination
         #    3.4 delete temporal files
 
-        files = list(df["urls"])  # List of all files to be compressed
+        files = list(df["URL"])  # List of all files to be compressed
 
         if len(files) < 1:
             raise ValueError(f"No files to be zipped!")
@@ -904,9 +895,12 @@ class DataCollector(LoggerSuperclass):
         files = [self.fileserver.url2path(f) for f in files]
         df["src_files"] = files
         dst_files = []
+        folders = []
         for _, row in df.iterrows():
-            sensor = row["sensor_id"]
-            dst_files.append(sensor + "/" + os.path.basename(row["src_files"]))
+            pic_folder = row["timestamp"].strftime("%Y/%m/%d")
+            if pic_folder not in folders:
+                folders.append(pic_folder)
+            dst_files.append(pic_folder + "/" + os.path.basename(row["src_files"]))
 
         df["files"] = dst_files
 
@@ -918,17 +912,18 @@ class DataCollector(LoggerSuperclass):
 
         dfcsv = df.copy()
         dfcsv = dfcsv
+
         del dfcsv["src_files"]
         dfcsv.to_csv("index.csv", index=False)
         # If the command is too long it cannot be sent via ssh and will raise an OSError, we create a temporal script
         # with the command and send it to the host
         script_name = os.path.basename(remote_filename).split(".")[0] + ".sh"
         self.info(f"Creating zip script {script_name}...")
-        sensors = df["sensor_id"].unique()  # get list of sensors with data
 
         # create sensor folders
-        for sensor in sensors:
-            run_over_ssh(self.fileserver.host, f"mkdir -p {tmp_folder}/{sensor}")
+        abs_folders = [os.path.join(tmp_folder, f) for f in folders]
+        run_over_ssh(self.fileserver.host, f"mkdir -p {' '.join(abs_folders)}")
+
         # Send index.csv file
         self.fileserver.send_file(tmp_folder, "index.csv", indexed=False)
         os.remove("index.csv")  # remove local index.csv
@@ -949,13 +944,19 @@ class DataCollector(LoggerSuperclass):
                 # directly copy
                 cmd += f"ln -s {source} {dest}\n"
 
-        cmd += f"zip -6 -rn .jpg:.jpeg:.mp4:.png:.nc -r {remote_filename} index.csv {' '.join(sensors)}\n"
+            # At this point the file should be created
+            # if the destination and the fileserver are the same (very likely), just copy from temp folder to the definitive
+            # folder
 
-        for sensor in sensors:
-            cmd += f"rm -rf {sensor} \n"
-        cmd += f"rm {tmp_folder}/index.csv\n"
-        cmd += f"rm {tmp_folder}/{script_name}\n"
-        cmd += f"rmdir {tmp_folder}\n"
+        if self.fileserver.host != resource["host"]:
+            self.error("Not implemented! FileServer and destination are not the same?", exception=ValueError)
+
+        dest = resource["path"]
+        src = remote_filename
+        self.info(f"Moving inside fileserver from {src} to {dest}")
+        remote_filename = os.path.join(dest, os.path.basename(src))
+        cmd += f"zip -6 -rn .jpg:.jpeg:.mp4:.png:.nc -r {remote_filename} index.csv {' '.join(folders)}\n"
+        cmd += f"rm -rf {tmp_folder}\n"
 
         with open(script_name, "w") as f:
             f.write(cmd)  # write the command to the script
@@ -972,6 +973,8 @@ class DataCollector(LoggerSuperclass):
         run_over_ssh(self.fileserver.host, script_dest + "/" + script_name, fail_exit=True)
         self.info(f"Script executed, it took {time.time() -t :.02f} seconds")
 
+        delivered = True
+
         # Check if the size is coherent
         a = run_over_ssh(self.fileserver.host, f"ls -l {remote_filename}")
         size = int(a.split(" ")[4])  # size is column 5 of ls -l command
@@ -981,25 +984,8 @@ class DataCollector(LoggerSuperclass):
             self.warning(f"Remote filename: {remote_filename}")
             self.error(f"ZIP file looks empty (file size {human_readable_bytes(size)})! less than 3k means there's nothing inside", exception=ValueError)
 
-        # At this point the file should be created
-        # if the destination and the fileserver are the same (very likely), just copy from temp folder to the definitive
-        # folder
-        if self.fileserver.host == resource["host"]:
-            dest = resource["path"]
-            src = remote_filename
-            self.info(f"Moving inside fileserver from {src} to {dest}")
-            filename = os.path.join(dest, os.path.basename(src))
-            run_over_ssh(self.fileserver.host, f"mkdir -p {os.path.dirname(filename)}")
-            run_over_ssh(self.fileserver.host, f"mv {src} {filename}")
-            delivered = True
-
-        else:
-            # Download to this machine
-            self.error("Not implemented! FileServer and destination are not the same?", exception=ValueError)
-            delivered = False
-
         os.remove(script_name)
-        return filename, delivered
+        return remote_filename, delivered
 
 
     def metadata_harmonizer_conf(self, dataset: dict, tstart: pd.Timestamp = None, tend: pd.Timestamp = None,
@@ -1130,7 +1116,6 @@ class DataCollector(LoggerSuperclass):
             units = self.mc.get_document("units", units_id)
             self.debug(f"   getting {variable_id} with units {units['symbol']}")
             varname = variable_id.replace("-", "_").replace(" ", "_")
-
             if variable["type"] == "environmental":
                 meta["variables"][varname] = {
                     "long_name": variable["description"],

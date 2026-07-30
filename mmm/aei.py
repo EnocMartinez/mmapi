@@ -82,6 +82,7 @@ def get_aei_metadata(project_id: str) -> dict:
         },
         "totalBudget": float(aei_data["€ Conced."].replace(".", "").replace(",", "."))
     }
+    data["title"] = str(data["title"]).capitalize()
     return data
 
 

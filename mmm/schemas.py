@@ -535,6 +535,13 @@ zenodo_exporter_conf = {
         # This is required when yearlyRecord is activated, the $year$ key will be replaced with the proper year
         "title": { "type": "string"},
         "communities":    {"type": "array", "items": {"type": "string"}},
+        "derivedFrom": {
+            "type": "object",
+            "properties": {
+                "@datasets": {"type": "string"},
+            },
+            "required": ["@datasets"]
+        },
     },
     "additionalProperties": False,
     "required": ["resources", "&readme"]
@@ -573,13 +580,7 @@ __datasets = {
                 "type": "string"
             }
         },
-        "@variables": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-                "type": "string",
-            }
-        },
+        "@variables": { "type": "array", "items": {"type": "string"} },
         "constraints": {  # Constraint the datset to certain conditions, such as depth and/or time
             "type": "object",
             "additionalProperties": False,
@@ -632,6 +633,7 @@ __datasets = {
             "required": ["@projects"]
         }
     },
+    "additionalProperties": False,
     "required": ["title", "keywords", "summary", "@stations", "@sensors",  "contacts", "dataSourceOptions", "export", "dataMode"]
 }
 

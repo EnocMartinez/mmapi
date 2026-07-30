@@ -29,7 +29,7 @@ import os
 
 def generate_dataset(dataset_id: str, service_name: str, time_start: pd.Timestamp, time_end: pd.Timestamp, secrets,
                      log: logging.Logger, format:str= "", verbose=False, erddap_config=False, overwrite=False,
-                     resources=[], local=False, publish=False, limit:int=0) :
+                     resources=[], local=False, publish=False, limit:int=0, no_files=False) :
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -54,7 +54,8 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: pd.Timestam
     dc = DataCollector(secrets, log, mc=mc)
 
     dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, secrets=secrets, limit=limit,
-                        overwrite=overwrite, erddap_config=erddap_config, resources=resources, local=local, publish=publish)
+                        overwrite=overwrite, erddap_config=erddap_config, resources=resources, local=local,
+                        publish=publish, no_files=no_files)
 
 def list_datasets(secrets, verbose=False):
     with open(secrets) as f:
@@ -94,6 +95,7 @@ if __name__ == "__main__":
                            help="Suggest format such as netcdf, csv, etc. May not work for all datasets")
 
     argparser.add_argument("-P", "--publish", help="For Zenodo datasets, publish it and get the DOI", action="store_true")
+    argparser.add_argument("--no-files", help="For Zenodo datasets, create the record but do not upload files", action="store_true")
 
 
     args = argparser.parse_args()
@@ -122,4 +124,4 @@ if __name__ == "__main__":
     for service in args.services:
         generate_dataset(args.dataset_id, service, tstart, tend, args.secrets, log, format=args.format,
                          verbose=args.verbose, erddap_config=args.erddap, overwrite=args.overwrite,
-                         resources=args.resources, local=args.local, publish=args.publish, limit=args.limit)
+                         resources=args.resources, local=args.local, publish=args.publish, limit=args.limit, no_files=args.no_files)

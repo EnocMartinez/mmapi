@@ -478,19 +478,22 @@ def assert_dict(conf: dict, required_keys: dict, verbose=False):
             raise AssertionError(msg)
 
 
-def validate_schema(doc: dict, schema: dict, errors=[], verbose=False) -> list:
+def validate_schema(doc: dict, schema: dict, errors=[], verbose=False, strip_meta=True) -> list:
+    doc_id = doc["#id"]
+    if strip_meta:
+        doc = strip_metadata_fields(doc)
     error_list = errors
     errors = []
     if "$id" not in schema.keys():
         raise ValueError("Schema not valid!! missing $id field")
 
     if verbose:
-        rich.print(f"   Validating doc='{doc['#id']}' against schema {schema['$id']}")
+        rich.print(f"   Validating doc='{doc_id}' against schema {schema['$id']}")
 
     try:  # validate against metadata schema
         jsonschema.validate(doc, schema=schema)
     except jsonschema.ValidationError as e:
-        txt = f"[red]Document='{doc['#id']}' not valid for schema '{schema['$id']}'[/red]. Cause: {e.message}"
+        txt = f"[red]Document='{doc_id}' not valid for schema '{schema['$id']}'[/red]. Cause: {e.message}"
         errors.append(txt)
 
     # Now apply custom rules
@@ -498,12 +501,12 @@ def validate_schema(doc: dict, schema: dict, errors=[], verbose=False) -> list:
         # Sensor deployments must be attached to a station
         if "@sensors" in doc["appliedTo"].keys() and doc["type"] == "deployment":
             if "where" not in doc.keys() or "@stations" not in doc["where"].keys():
-                errors.append(f"[red]Document='{doc['#id']}' sensor deployment MUST reference a station!")
+                errors.append(f"[red]Document='{doc_id}' sensor deployment MUST reference a station!")
 
         # Stations deployments must have a position
         if "@stations" in doc["appliedTo"].keys() and doc["type"] == "deployment":
             if "where" not in doc.keys() or "position" not in doc["where"].keys():
-                errors.append(f"[red]Document='{doc['#id']}' station deployment MUST have GPS coordinates!")
+                errors.append(f"[red]Document='{doc_id}' station deployment MUST have GPS coordinates!")
 
         # Make sure that each activity points to a single sensor/station/resource
         keys = doc["appliedTo"].keys()
@@ -739,3 +742,49 @@ def extract_netcdf_metadata(file_path: str) -> dict:
         }
 
     return metadata
+
+
+@staticmethod
+def strip_metadata_fields(doc: dict) -> dict:
+    """
+    Takes a document and strips all metadata (id, version, author...)
+    :param doc: dict
+    :return: cleaned document
+    """
+    return {key: value for key, value in doc.items() if not key.startswith("#")}
+
+
+import pandas as pd
+
+
+def check_sensor_deployments(deployments: list, tmin: pd.Timestamp, tmax: pd.Timestamp) -> bool:
+    """
+    Returns True if the sensor was deployed in the supported
+    :param deployments:
+    :param tmin:
+    :param tmax:
+    :return:
+    """
+    # Ensure tmin/tmax are comparable (handle tz-naive vs tz-aware if needed)
+    for deployment in deployments:
+        start = deployment.get("start")
+
+        # If 'end' is None, treat it as the current time
+        # Match timezone awareness of the 'start' timestamp if present
+        end = deployment.get("end")
+        if end is None:
+            end = (
+                pd.Timestamp.now(tz=start.tz)
+                if start and start.tz
+                else pd.Timestamp.now()
+            )
+
+        # Skip invalid entries where dates are missing
+        if start is None or end is None:
+            continue
+
+        # Overlap logic: (Start_A < End_B) and (End_A > Start_B)
+        if start < tmax and end > tmin:
+            return True
+
+    return False
